@@ -8,14 +8,14 @@ At the moment, the script is not published to npm, so
 you can install the package globally using npm:
 
 ```bash
-npm install -g git+ssh://git@github.com:floriancrusius/checkssl.git
+npm install -g git+ssh://git@github.com:floriancrusius/checkssl.git#v1.0.0
 
 ```
 
 or
 
 ```bash
-npm install -g git+https://github.com/floriancrusius/checkssl.git
+npm install -g git+https://github.com/floriancrusius/checkssl.git#v1.0.0
 
 ```
 
