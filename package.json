@@ -1,0 +1,21 @@
+{
+  "name": "checkssl",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "bin": {
+    "checkssl": "./index.js"
+  },
+  "repository": "github:floriancrusius/checkssl",
+  "bugs": {
+    "url": "https://github.com/floriancrusius/issues"
+  },
+  "homepage": "https://github.com/floriancrusius/checkssl",
+  "keywords": [],
+  "author": "Florian Crusius",
+  "license": "ISC",
+  "private": true
+}
