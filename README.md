@@ -54,13 +54,3 @@ The script will exit with a code of 0 if it runs successfully, or 1 if it encoun
 ## Dependencies
 
 This script uses the built-in `https`, `fs`, `os`, and `path` modules in Node.js, so no additional installation is required.
-
-## Code
-
-Here is the main script:
-
-```javascript
-// The code goes here
-```
-
-You can copy the above markdown and paste it into your README or any markdown file. Replace `// The code goes here` with the actual code.
