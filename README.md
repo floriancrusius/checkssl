@@ -21,7 +21,7 @@ npm install -g git+https://github.com/floriancrusius/checkssl.git
 
 ## Usage
 
-You can provide domains directly with one or multiple `-d` option, or you can provide one or multiple file containing a list of domains with the `-f` option. If no domains or files are provided, the script will look for a file named `.checkssl` in your home directory.
+You can provide domains directly with one or multiple `-d` option, or you can provide one or multiple file containing a list of domains with multiple `-f` option. If no domains or files are provided, the script will look for a file named `.checkssl` in your home directory.
 
 Here are some examples:
 
