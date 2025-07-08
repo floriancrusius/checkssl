@@ -19,6 +19,7 @@ const {
   printErrors,
 } = require('./lib/helper');
 const getCertificate = require('./lib/request');
+const packageJson = require('./package.json');
 
 /**
  * Configuration constants
@@ -117,9 +118,14 @@ const parseArguments = (args) => {
       case '-s':
         suppressErrorMessages = true;
         break;
-
       case '-h':
         sendHelp();
+        exit(EXIT_CODES.SUCCESS);
+      // falls through - unreachable due to exit()
+
+      case '-v':
+      case '--version':
+        console.log(`checkssl v${packageJson.version}`);
         exit(EXIT_CODES.SUCCESS);
       // falls through - unreachable due to exit()
 

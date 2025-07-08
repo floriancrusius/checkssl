@@ -208,6 +208,28 @@ describe('index.js', () => {
       expect(mockExit).toHaveBeenCalledWith(0);
     });
 
+    test('should handle -v flag', () => {
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      parseArguments(['-v']);
+
+      expect(consoleSpy).toHaveBeenCalledWith('checkssl v1.0.0');
+      expect(mockExit).toHaveBeenCalledWith(0);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('should handle --version flag', () => {
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      parseArguments(['--version']);
+
+      expect(consoleSpy).toHaveBeenCalledWith('checkssl v1.0.0');
+      expect(mockExit).toHaveBeenCalledWith(0);
+
+      consoleSpy.mockRestore();
+    });
+
     test('should ignore unknown arguments', () => {
       const result = parseArguments(['--unknown', 'value']);
 
