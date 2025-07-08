@@ -111,12 +111,32 @@ describe('Helper Functions', () => {
       expect(date.getDate()).toBe(1);
     });
 
+    test('should parse valid American date format', () => {
+      const date = parseDate('01/01/2025');
+      expect(date.getFullYear()).toBe(2025);
+      expect(date.getMonth()).toBe(0); // January is 0
+      expect(date.getDate()).toBe(1);
+    });
+
+    test('should distinguish between German and American formats correctly', () => {
+      // German format: 02.01.2025 = January 2nd
+      const germanDate = parseDate('02.01.2025');
+      expect(germanDate.getMonth()).toBe(0); // January
+      expect(germanDate.getDate()).toBe(2);
+
+      // American format: 02/01/2025 = February 1st
+      const americanDate = parseDate('02/01/2025');
+      expect(americanDate.getMonth()).toBe(1); // February
+      expect(americanDate.getDate()).toBe(1);
+    });
+
     test('should throw error for invalid date formats', () => {
       expect(() => parseDate('2025-01-01')).toThrow();
-      expect(() => parseDate('01/01/2025')).toThrow();
       expect(() => parseDate('invalid')).toThrow();
       expect(() => parseDate('')).toThrow();
       expect(() => parseDate(null)).toThrow();
+      expect(() => parseDate('01.01')).toThrow();
+      expect(() => parseDate('01/01')).toThrow();
     });
 
     test('should throw error for invalid date components', () => {
