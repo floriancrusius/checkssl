@@ -33,6 +33,10 @@ module.exports = [
       'comma-dangle': ['error', 'always-multiline'],
       quotes: ['error', 'single'],
       semi: ['error', 'always'],
+      'no-fallthrough': [
+        'error',
+        { commentPattern: 'falls?\\s?through|break[\\s\\w]*omitted' },
+      ],
     },
   },
   {

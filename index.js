@@ -121,7 +121,7 @@ const parseArguments = (args) => {
       case '-h':
         sendHelp();
         exit(EXIT_CODES.SUCCESS);
-        break;
+      // falls through - unreachable due to exit()
 
       default:
         // Ignore unknown arguments
