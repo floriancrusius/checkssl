@@ -33,7 +33,15 @@ checkssl -d example.com
 checkssl -d example.com -d example.org
 
 # Check domains from a file
-checkssl -f domains.txt
+checkssl -f /path/to/your/file/contains/domains
+```
+
+example file:
+
+```bash
+# `#`comments are allowed
+example.com # this is a comment
+example.org
 ```
 
 The script will output a table with the domains and their SSL certificate expiration dates, sorted in ascending order by date.

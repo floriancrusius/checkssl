@@ -17,5 +17,14 @@
   "keywords": [],
   "author": "Florian Crusius",
   "license": "ISC",
-  "private": true
+  "private": true,
+  "pkg": {
+    "scripts": "index.js",
+    "bin": "checkssl",
+    "targets": [
+      "node18-linux-x64",
+      "node18-macos-x64",
+      "node18-win-x64"
+    ]
+  }
 }
