@@ -1,10 +1,21 @@
 {
   "name": "checkssl",
   "version": "1.0.0",
-  "description": "",
+  "description": "A Node.js CLI tool to check SSL certificate expiration dates for domains",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "build": "make build",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky install"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "bin": {
     "checkssl": "./index.js"
@@ -14,10 +25,34 @@
     "url": "https://github.com/floriancrusius/issues"
   },
   "homepage": "https://github.com/floriancrusius/checkssl",
-  "keywords": [],
+  "keywords": [
+    "ssl",
+    "certificate",
+    "expiration",
+    "cli",
+    "security",
+    "domain"
+  ],
   "author": "Florian Crusius",
   "license": "ISC",
   "private": true,
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "husky": "^9.0.0",
+    "jest": "^29.0.0",
+    "lint-staged": "^15.0.0",
+    "prettier": "^3.0.0"
+  },
+  "lint-staged": {
+    "*.js": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ]
+  },
   "pkg": {
     "scripts": "index.js",
     "bin": "checkssl",
