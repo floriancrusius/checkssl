@@ -5,6 +5,8 @@ const {
   parseDate,
   sortResults,
   formatResults,
+  formatResultsCSV,
+  formatResultsJSON,
   separator,
   sendHelp,
   printTable,
@@ -237,6 +239,81 @@ describe('Helper Functions', () => {
     });
   });
 
+  describe('formatResultsCSV', () => {
+    test('should format results as CSV correctly', () => {
+      const results = [
+        { domain: 'example.com', result: '01.01.2025' },
+        { domain: 'test.org', result: '02.02.2025' },
+      ];
+
+      const csvOutput = formatResultsCSV(results);
+      const lines = csvOutput.split('\n');
+
+      expect(lines[0]).toBe('Domain,Expiration');
+      expect(lines[1]).toBe('"example.com","01.01.2025"');
+      expect(lines[2]).toBe('"test.org","02.02.2025"');
+    });
+
+    test('should handle CSV escaping correctly', () => {
+      const results = [
+        { domain: 'example,with,commas.com', result: 'Result with "quotes"' },
+      ];
+
+      const csvOutput = formatResultsCSV(results);
+      const lines = csvOutput.split('\n');
+
+      expect(lines[1]).toBe(
+        '"example,with,commas.com","Result with ""quotes"""',
+      );
+    });
+
+    test('should throw error for non-array input', () => {
+      expect(() => formatResultsCSV('not an array')).toThrow(
+        'Results must be an array',
+      );
+      expect(() => formatResultsCSV(null)).toThrow('Results must be an array');
+    });
+  });
+
+  describe('formatResultsJSON', () => {
+    test('should format results as JSON correctly', () => {
+      const results = [
+        { domain: 'example.com', result: '01.01.2025' },
+        { domain: 'test.org', result: '02.02.2025' },
+      ];
+
+      const jsonOutput = formatResultsJSON(results);
+      const parsed = JSON.parse(jsonOutput);
+
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0]).toEqual({
+        domain: 'example.com',
+        expiration: '01.01.2025',
+      });
+      expect(parsed[1]).toEqual({
+        domain: 'test.org',
+        expiration: '02.02.2025',
+      });
+    });
+
+    test('should handle empty results array', () => {
+      const results = [];
+      const jsonOutput = formatResultsJSON(results);
+      const parsed = JSON.parse(jsonOutput);
+
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(0);
+    });
+
+    test('should throw error for non-array input', () => {
+      expect(() => formatResultsJSON('not an array')).toThrow(
+        'Results must be an array',
+      );
+      expect(() => formatResultsJSON(null)).toThrow('Results must be an array');
+    });
+  });
+
   describe('separator', () => {
     test('should create separator with correct length', () => {
       const sep = separator(10);
@@ -259,20 +336,36 @@ describe('Helper Functions', () => {
       expect(consoleSpy).toHaveBeenCalledWith('');
       expect(consoleSpy).toHaveBeenCalledWith('Options:');
       expect(consoleSpy).toHaveBeenCalledWith(
-        '  -d <domain>    Check a specific domain',
+        '  -d <domain>      Check a specific domain',
       );
       expect(consoleSpy).toHaveBeenCalledWith(
-        '  -f <file>      Read domains from a file',
+        '  -f <file>        Read domains from a file',
       );
       expect(consoleSpy).toHaveBeenCalledWith(
-        '  -s             Suppress error messages',
+        '  -s               Suppress error messages',
       );
       expect(consoleSpy).toHaveBeenCalledWith(
-        '  -h             Show this help message',
+        '  --format <type>  Output format: table (default), csv, json',
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '  -h               Show this help message',
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '  -v, --version    Show version information',
       );
       expect(consoleSpy).toHaveBeenCalledWith('Examples:');
       expect(consoleSpy).toHaveBeenCalledWith('  checkssl -d google.com');
       expect(consoleSpy).toHaveBeenCalledWith('  checkssl -f domains.txt');
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '  checkssl -d example.com -d another.com',
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '  checkssl -d google.com --format csv',
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '  checkssl -f domains.txt --format json',
+      );
+      expect(consoleSpy).toHaveBeenCalledWith('  checkssl --version');
       expect(consoleSpy).toHaveBeenCalledWith(
         '  checkssl -d example.com -d another.com',
       );

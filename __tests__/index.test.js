@@ -235,6 +235,34 @@ describe('index.js', () => {
 
       expect(result).toEqual([]);
     });
+
+    test('should handle --format flag with valid formats', () => {
+      // Test with table format
+      let result = parseArguments(['--format', 'table', '-d', 'example.com']);
+      expect(result).toEqual(['example.com']);
+
+      // Test with csv format
+      result = parseArguments(['--format', 'csv', '-d', 'example.com']);
+      expect(result).toEqual(['example.com']);
+
+      // Test with json format
+      result = parseArguments(['--format', 'json', '-d', 'example.com']);
+      expect(result).toEqual(['example.com']);
+    });
+
+    test('should handle missing format after --format flag', () => {
+      const result = parseArguments(['--format']);
+
+      expect(result).toEqual([]);
+      // Note: Error handling would need to be tested with the error collection
+    });
+
+    test('should handle invalid format with --format flag', () => {
+      const result = parseArguments(['--format', 'xml', '-d', 'example.com']);
+
+      expect(result).toEqual(['example.com']);
+      // Note: Error handling would need to be tested with the error collection
+    });
   });
 
   describe('main function integration', () => {

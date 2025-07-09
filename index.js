@@ -12,6 +12,8 @@ const {
   domainLengthReducer,
   sortResults,
   formatResults,
+  formatResultsCSV,
+  formatResultsJSON,
   separator,
   sendHelp,
   printTable,
@@ -35,6 +37,7 @@ const EXIT_CODES = {
  * Application state
  */
 let suppressErrorMessages = false;
+let outputFormat = 'table'; // Default format
 const input = process.argv.slice(2);
 const errors = [];
 
@@ -118,6 +121,25 @@ const parseArguments = (args) => {
       case '-s':
         suppressErrorMessages = true;
         break;
+
+      case '--format': {
+        const format = args[i + 1];
+        if (!format) {
+          addError('Missing format after --format option');
+          break;
+        }
+
+        if (['table', 'csv', 'json'].includes(format)) {
+          outputFormat = format;
+        } else {
+          addError(
+            `Invalid format: ${format}. Supported formats: table, csv, json`,
+          );
+        }
+        i++; // Skip the next argument (format)
+        break;
+      }
+
       case '-h':
         sendHelp();
         exit(EXIT_CODES.SUCCESS);
@@ -175,40 +197,64 @@ const checkCertificates = async (domainsToCheck) => {
 };
 
 /**
- * Display results in a formatted table
+ * Display results in the specified format
  * @param {Array<{domain: string, result: string}>} results - Certificate check results
  * @param {Array<string>} originalDomains - Original domain list for help display
  */
 const displayResults = (results, originalDomains) => {
   if (results.length === 0) {
-    sendHelp();
-    printInfo();
+    if (outputFormat === 'table') {
+      sendHelp();
+      printInfo();
+    }
     return;
   }
 
-  const maxDomainLength = results
-    .map(({ domain }) => domain)
-    .reduce(domainLengthReducer, 0);
-
   const sortedResults = sortResults(results);
-  const formattedResults = formatResults(sortedResults, maxDomainLength);
-  const separatorLine = separator(maxDomainLength);
 
-  // Show help if no domains were originally provided
-  if (originalDomains.length === 0) {
-    sendHelp();
+  // Output based on selected format
+  switch (outputFormat) {
+    case 'csv':
+      console.log(formatResultsCSV(sortedResults));
+      break;
+
+    case 'json':
+      console.log(formatResultsJSON(sortedResults));
+      break;
+
+    case 'table':
+    default: {
+      const maxDomainLength = results
+        .map(({ domain }) => domain)
+        .reduce(domainLengthReducer, 0);
+
+      const formattedResults = formatResults(sortedResults, maxDomainLength);
+      const separatorLine = separator(maxDomainLength);
+
+      // Show help if no domains were originally provided
+      if (originalDomains.length === 0) {
+        sendHelp();
+      }
+
+      printTable(formattedResults, separatorLine);
+
+      // Show errors if not suppressed
+      if (errors.length > 0 && !suppressErrorMessages) {
+        printErrors(errors);
+      }
+
+      // Show info if no domains were originally provided
+      if (originalDomains.length === 0) {
+        printInfo();
+      }
+      break;
+    }
   }
 
-  printTable(formattedResults, separatorLine);
-
-  // Show errors if not suppressed
-  if (errors.length > 0 && !suppressErrorMessages) {
-    printErrors(errors);
-  }
-
-  // Show info if no domains were originally provided
-  if (originalDomains.length === 0) {
-    printInfo();
+  // For non-table formats, show errors separately if not suppressed
+  if (outputFormat !== 'table' && errors.length > 0 && !suppressErrorMessages) {
+    console.error('\n--- Errors ---');
+    errors.forEach((error) => console.error(error));
   }
 };
 
