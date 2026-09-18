@@ -5,6 +5,7 @@ const fs = require('fs');
 const { exit } = require('process');
 const { homedir } = require('os');
 const { resolve } = require('path');
+const { parseArgs } = require('util');
 
 const {
   validateDomain,
@@ -76,105 +77,76 @@ const readDomainsFromFile = (filePath) => {
   }
 };
 
+const CLI_OPTIONS = {
+  file: { type: 'string', short: 'f', multiple: true },
+  domain: { type: 'string', short: 'd', multiple: true },
+  format: { type: 'string' },
+  silent: { type: 'boolean', short: 's' },
+  help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
+};
+
+const VALID_FORMATS = ['table', 'csv', 'json'];
+
 /**
- * Parse command line arguments and extract domains
- * @param {Array<string>} args - Command line arguments
- * @returns {Array<string>} - Array of domains to check
+ * Parse command line arguments and collect the domains to check.
+ * @param {Array<string>} args
+ * @returns {Array<string>}
  */
 const parseArguments = (args) => {
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args,
+      options: CLI_OPTIONS,
+      strict: true,
+      allowPositionals: true,
+    }));
+  } catch (error) {
+    addError(`Syntax error: ${error.message}`);
+    sendHelp();
+    return [];
+  }
+
+  if (values.help) {
+    sendHelp();
+    exit(EXIT_CODES.SUCCESS);
+  }
+
+  if (values.version) {
+    console.log(`checkssl v${packageJson.version}`);
+    exit(EXIT_CODES.SUCCESS);
+  }
+
+  if (values.silent) {
+    suppressErrorMessages = true;
+  }
+
+  if (values.format !== undefined) {
+    if (VALID_FORMATS.includes(values.format)) {
+      outputFormat = values.format;
+    } else {
+      addError(
+        `Invalid format: ${values.format}. Supported formats: ${VALID_FORMATS.join(', ')}`,
+      );
+    }
+  }
+
   const domains = [];
+  const addDomain = (domain) => {
+    if (!domains.includes(domain)) domains.push(domain);
+  };
 
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+  for (const filePath of values.file || []) {
+    const fileDomains = readDomainsFromFile(resolve(filePath));
+    fileDomains.forEach(addDomain);
+  }
 
-    switch (arg) {
-      case '-f':
-      case '--file': {
-        const filePath = args[i + 1];
-        if (filePath?.startsWith('-')) {
-          addError('Syntax error: Expected file path after -f option');
-          sendHelp();
-          i = args.length; // Exit loop
-          break;
-        }
-        if (!filePath) {
-          addError('Missing file path after -f option');
-          break;
-        }
-
-        const resolvedPath = resolve(filePath);
-        const fileDomains = readDomainsFromFile(resolvedPath);
-        domains.push(...fileDomains);
-        i++; // Skip the next argument (file path)
-        break;
-      }
-
-      case '-d':
-      case '--domain': {
-        const domain = args[i + 1];
-        if (domain?.startsWith('-')) {
-          addError('Syntax error: Expected domain after -d option');
-          sendHelp();
-          i = args.length; // Exit loop
-          break;
-        }
-        if (!domain) {
-          addError('Missing domain after -d option');
-          break;
-        }
-
-        if (!domains.includes(domain) && isValidDomain(domain)) {
-          domains.push(domain);
-        } else if (!isValidDomain(domain)) {
-          addError(`Invalid domain: ${domain}`);
-        }
-        i++; // Skip the next argument (domain)
-        break;
-      }
-
-      case '-s':
-        suppressErrorMessages = true;
-        break;
-
-      case '--format': {
-        const format = args[i + 1];
-        if (format?.startsWith('-')) {
-          addError('Syntax error: Expected format after --format option');
-          sendHelp();
-          i = args.length; // Exit loop
-          break;
-        }
-        if (!format) {
-          addError('Missing format after --format option');
-          break;
-        }
-
-        if (['table', 'csv', 'json'].includes(format)) {
-          outputFormat = format;
-        } else {
-          addError(
-            `Invalid format: ${format}. Supported formats: table, csv, json`,
-          );
-        }
-        i++; // Skip the next argument (format)
-        break;
-      }
-
-      case '-h':
-      case '--help':
-        sendHelp();
-        exit(EXIT_CODES.SUCCESS);
-      // falls through - unreachable due to exit()
-
-      case '-v':
-      case '--version':
-        console.log(`checkssl v${packageJson.version}`);
-        exit(EXIT_CODES.SUCCESS);
-      // falls through - unreachable due to exit()
-
-      default:
-        // Ignore unknown arguments
-        break;
+  for (const domain of values.domain || []) {
+    if (isValidDomain(domain)) {
+      addDomain(domain);
+    } else {
+      addError(`Invalid domain: ${domain}`);
     }
   }
 
@@ -344,12 +316,14 @@ const main = async () => {
     // Parse command line arguments
     const domains = parseArguments(input);
 
-    // Load default domains if none provided via arguments
-    if (
-      domains.length === 0 &&
-      !input.includes('-d') &&
-      !input.includes('-f')
-    ) {
+    // Load default domains if the user provided no source flag at all
+    const DOMAIN_SOURCE_FLAGS = ['-d', '--domain', '-f', '--file'];
+    const userGaveSource = input.some((arg) =>
+      DOMAIN_SOURCE_FLAGS.some(
+        (flag) => arg === flag || arg.startsWith(`${flag}=`),
+      ),
+    );
+    if (domains.length === 0 && !userGaveSource) {
       const defaultDomains = loadDefaultDomains();
       domains.push(...defaultDomains);
     }
