@@ -64,7 +64,15 @@ describe('index.js', () => {
     mockHelper.sortResults.mockImplementation((results) => results);
     mockHelper.formatResults.mockReturnValue(['formatted result']);
     mockHelper.separator.mockReturnValue('----------');
-    mockGetCertificate.mockResolvedValue('01.01.2025');
+    mockGetCertificate.mockResolvedValue({
+      validFrom: new Date('2024-01-01T00:00:00Z'),
+      validTo: new Date('2030-01-01T00:00:00Z'),
+      issuer: null,
+      subject: null,
+      subjectAltName: null,
+      authorized: true,
+      authorizationError: null,
+    });
 
     // Mock console methods
     consoleSpy = {

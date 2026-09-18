@@ -1,53 +1,108 @@
 const getCertificate = require('../lib/request');
-const https = require('https');
+const tls = require('tls');
+const { EventEmitter } = require('events');
 
-// Mock the https module
-jest.mock('https');
+jest.mock('tls');
+
+/**
+ * Build a fake TLS socket with configurable behavior.
+ * - certificate: value returned by getPeerCertificate()
+ * - authorized: socket.authorized boolean
+ * - authorizationError: socket.authorizationError value
+ * - onConnect: 'immediate' (invoke callback next tick), or omitted
+ */
+const buildMockSocket = ({
+  certificate,
+  authorized = true,
+  authorizationError = null,
+} = {}) => {
+  const socket = new EventEmitter();
+  socket.authorized = authorized;
+  socket.authorizationError = authorizationError;
+  socket.getPeerCertificate = jest.fn().mockReturnValue(certificate);
+  socket.end = jest.fn();
+  socket.destroy = jest.fn();
+  return socket;
+};
 
 describe('getCertificate', () => {
-  let mockRequest;
-  let mockSocket;
-
-  beforeEach(() => {
-    mockSocket = {
-      getPeerCertificate: jest.fn(),
-      on: jest.fn(),
-    };
-
-    mockRequest = {
-      on: jest.fn(),
-      end: jest.fn(),
-      destroy: jest.fn(),
-    };
-
-    https.request.mockReturnValue(mockRequest);
-  });
-
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  test('should resolve with formatted date for valid certificate', async () => {
-    const mockCertificate = {
-      valid_to: 'Jan 1 2030 00:00:00 GMT', // Future date
-    };
-
-    mockSocket.getPeerCertificate.mockReturnValue(mockCertificate);
-
-    // Mock the response
-    const mockResponse = { socket: mockSocket };
-
-    // Simulate successful request
-    https.request.mockImplementation((options, callback) => {
-      process.nextTick(() => callback(mockResponse));
-      return mockRequest;
+  test('resolves with cert info for a valid, authorized certificate', async () => {
+    const socket = buildMockSocket({
+      certificate: {
+        valid_from: 'Jan 1 2024 00:00:00 GMT',
+        valid_to: 'Jan 1 2030 00:00:00 GMT',
+        issuer: { CN: 'Test CA' },
+        subject: { CN: 'example.com' },
+        subjectaltname: 'DNS:example.com',
+      },
+      authorized: true,
     });
 
-    const result = await getCertificate('example.com');
-    expect(result).toBe('01.01.2030');
+    tls.connect.mockImplementation((options, onConnect) => {
+      process.nextTick(onConnect);
+      return socket;
+    });
+
+    const info = await getCertificate('example.com');
+
+    expect(tls.connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: 'example.com',
+        port: 443,
+        servername: 'example.com',
+        rejectUnauthorized: false,
+        timeout: 5000,
+      }),
+      expect.any(Function),
+    );
+    expect(info.validTo).toEqual(new Date('Jan 1 2030 00:00:00 GMT'));
+    expect(info.validFrom).toEqual(new Date('Jan 1 2024 00:00:00 GMT'));
+    expect(info.authorized).toBe(true);
+    expect(info.authorizationError).toBeNull();
+    expect(info.subjectAltName).toBe('DNS:example.com');
+    expect(socket.end).toHaveBeenCalled();
   });
 
-  test('should reject when domain is not a string', async () => {
+  test('resolves for expired certificate instead of rejecting', async () => {
+    const socket = buildMockSocket({
+      certificate: { valid_to: 'Jan 1 2020 00:00:00 GMT' },
+      authorized: false,
+      authorizationError: 'CERT_HAS_EXPIRED',
+    });
+
+    tls.connect.mockImplementation((options, onConnect) => {
+      process.nextTick(onConnect);
+      return socket;
+    });
+
+    const info = await getCertificate('expired.example');
+    expect(info.validTo).toEqual(new Date('Jan 1 2020 00:00:00 GMT'));
+    expect(info.authorized).toBe(false);
+    expect(info.authorizationError).toBe('CERT_HAS_EXPIRED');
+  });
+
+  test('resolves for self-signed certificate instead of rejecting', async () => {
+    const socket = buildMockSocket({
+      certificate: { valid_to: 'Jan 1 2030 00:00:00 GMT' },
+      authorized: false,
+      authorizationError: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+    });
+
+    tls.connect.mockImplementation((options, onConnect) => {
+      process.nextTick(onConnect);
+      return socket;
+    });
+
+    const info = await getCertificate('selfsigned.example');
+    expect(info.authorized).toBe(false);
+    expect(info.authorizationError).toBe('DEPTH_ZERO_SELF_SIGNED_CERT');
+  });
+
+  test('rejects when domain is not a non-empty string', async () => {
     await expect(getCertificate(null)).rejects.toThrow(
       'Domain must be a non-empty string',
     );
@@ -57,16 +112,18 @@ describe('getCertificate', () => {
     await expect(getCertificate(123)).rejects.toThrow(
       'Domain must be a non-empty string',
     );
+    await expect(getCertificate('   ')).rejects.toThrow(
+      'Domain must be a non-empty string',
+    );
+    expect(tls.connect).not.toHaveBeenCalled();
   });
 
-  test('should reject when no certificate is found', async () => {
-    mockSocket.getPeerCertificate.mockReturnValue(null);
+  test('rejects when the peer returns no certificate', async () => {
+    const socket = buildMockSocket({ certificate: {} });
 
-    const mockResponse = { socket: mockSocket };
-
-    https.request.mockImplementation((options, callback) => {
-      process.nextTick(() => callback(mockResponse));
-      return mockRequest;
+    tls.connect.mockImplementation((options, onConnect) => {
+      process.nextTick(onConnect);
+      return socket;
     });
 
     await expect(getCertificate('example.com')).rejects.toThrow(
@@ -74,210 +131,92 @@ describe('getCertificate', () => {
     );
   });
 
-  test('should reject when certificate is already expired', async () => {
-    const mockCertificate = {
-      valid_to: 'Jan 1 2020 00:00:00 GMT', // Past date
-    };
+  test('rejects when cert has unparseable valid_to', async () => {
+    const socket = buildMockSocket({
+      certificate: { valid_to: 'not-a-date' },
+    });
 
-    mockSocket.getPeerCertificate.mockReturnValue(mockCertificate);
-
-    const mockResponse = { socket: mockSocket };
-
-    https.request.mockImplementation((options, callback) => {
-      process.nextTick(() => callback(mockResponse));
-      return mockRequest;
+    tls.connect.mockImplementation((options, onConnect) => {
+      process.nextTick(onConnect);
+      return socket;
     });
 
     await expect(getCertificate('example.com')).rejects.toThrow(
-      'Certificate for example.com has already expired',
+      'Invalid certificate date for example.com: not-a-date',
     );
   });
 
-  test('should reject on request error', async () => {
-    https.request.mockImplementation(() => {
-      process.nextTick(() => {
-        const errorCallback = mockRequest.on.mock.calls.find(
-          (call) => call[0] === 'error',
-        )[1];
-        errorCallback(new Error('Connection failed'));
-      });
-      return mockRequest;
+  test('rejects on socket error', async () => {
+    const socket = buildMockSocket({});
+    tls.connect.mockImplementation(() => {
+      process.nextTick(() => socket.emit('error', new Error('ECONNREFUSED')));
+      return socket;
     });
 
     await expect(getCertificate('example.com')).rejects.toThrow(
-      'Connection failed for example.com: Connection failed',
+      'Connection failed for example.com: ECONNREFUSED',
     );
   });
 
-  test('should reject on timeout', async () => {
-    https.request.mockImplementation(() => {
-      process.nextTick(() => {
-        const timeoutCallback = mockRequest.on.mock.calls.find(
-          (call) => call[0] === 'timeout',
-        )[1];
-        timeoutCallback();
-      });
-      return mockRequest;
+  test('rejects on timeout and destroys the socket', async () => {
+    const socket = buildMockSocket({});
+    tls.connect.mockImplementation(() => {
+      process.nextTick(() => socket.emit('timeout'));
+      return socket;
     });
 
     await expect(getCertificate('example.com')).rejects.toThrow(
       'Request timeout for example.com',
     );
+    expect(socket.destroy).toHaveBeenCalled();
   });
 
-  test('should use custom timeout', () => {
-    const customTimeout = 10000;
-    getCertificate('example.com', customTimeout);
+  test('respects custom timeout and port', () => {
+    const socket = buildMockSocket({
+      certificate: { valid_to: 'Jan 1 2030 00:00:00 GMT' },
+    });
+    tls.connect.mockReturnValue(socket);
 
-    expect(https.request).toHaveBeenCalledWith(
+    getCertificate('example.com', { timeout: 10000, port: 8443 });
+
+    expect(tls.connect).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: 10000, port: 8443 }),
+      expect.any(Function),
+    );
+  });
+
+  test('trims the servername', () => {
+    const socket = buildMockSocket({
+      certificate: { valid_to: 'Jan 1 2030 00:00:00 GMT' },
+    });
+    tls.connect.mockReturnValue(socket);
+
+    getCertificate('  example.com  ');
+
+    expect(tls.connect).toHaveBeenCalledWith(
       expect.objectContaining({
         host: 'example.com',
-        port: 443,
-        method: 'GET',
-        timeout: customTimeout,
-        rejectUnauthorized: true,
+        servername: 'example.com',
       }),
       expect.any(Function),
     );
   });
 
-  test('should handle socket errors', async () => {
-    https.request.mockImplementation(() => {
+  test('only settles once even if multiple events fire', async () => {
+    const socket = buildMockSocket({
+      certificate: { valid_to: 'Jan 1 2030 00:00:00 GMT' },
+    });
+
+    tls.connect.mockImplementation((options, onConnect) => {
       process.nextTick(() => {
-        const socketCallback = mockRequest.on.mock.calls.find(
-          (call) => call[0] === 'socket',
-        )[1];
-        const mockSocketWithError = {
-          ...mockSocket,
-          on: jest.fn((event, callback) => {
-            if (event === 'error') {
-              process.nextTick(() => callback(new Error('Socket error')));
-            }
-          }),
-        };
-        socketCallback(mockSocketWithError);
+        onConnect();
+        // A late error must not throw an unhandled rejection.
+        socket.emit('error', new Error('post-connect error'));
       });
-      return mockRequest;
+      return socket;
     });
 
-    await expect(getCertificate('example.com')).rejects.toThrow(
-      'Socket error for example.com: Socket error',
-    );
-  });
-
-  test('should handle certificate processing errors', async () => {
-    const mockCertificate = {
-      valid_to: 'invalid-date-format',
-    };
-
-    mockSocket.getPeerCertificate.mockReturnValue(mockCertificate);
-
-    const mockResponse = { socket: mockSocket };
-
-    https.request.mockImplementation((options, callback) => {
-      process.nextTick(() => callback(mockResponse));
-      return mockRequest;
-    });
-
-    await expect(getCertificate('example.com')).rejects.toThrow(
-      'Failed to process certificate for example.com',
-    );
-  });
-
-  test('should handle certificate without valid_to field', async () => {
-    const mockCertificate = {
-      // Missing valid_to field
-      subject: { CN: 'example.com' },
-    };
-
-    mockSocket.getPeerCertificate.mockReturnValue(mockCertificate);
-
-    const mockResponse = { socket: mockSocket };
-
-    https.request.mockImplementation((options, callback) => {
-      process.nextTick(() => callback(mockResponse));
-      return mockRequest;
-    });
-
-    await expect(getCertificate('example.com')).rejects.toThrow(
-      'No valid certificate found for example.com',
-    );
-  });
-
-  test('should register socket event handler', () => {
-    // Start the request
-    getCertificate('example.com');
-
-    // Verify that the request setup registers socket event handlers
-    expect(mockRequest.on).toHaveBeenCalledWith('socket', expect.any(Function));
-  });
-
-  test('should use default timeout of 5000ms', () => {
-    getCertificate('example.com');
-
-    expect(https.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeout: 5000,
-      }),
-      expect.any(Function),
-    );
-  });
-
-  test('should set rejectUnauthorized to true for security', () => {
-    getCertificate('example.com');
-
-    expect(https.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rejectUnauthorized: true,
-      }),
-      expect.any(Function),
-    );
-  });
-
-  test('should register timeout event handler', () => {
-    getCertificate('example.com');
-
-    expect(mockRequest.on).toHaveBeenCalledWith(
-      'timeout',
-      expect.any(Function),
-    );
-  });
-
-  test('should call req.end() to initiate request', () => {
-    getCertificate('example.com');
-
-    expect(mockRequest.end).toHaveBeenCalled();
-  });
-
-  test('should handle empty domain string', async () => {
-    await expect(getCertificate('')).rejects.toThrow(
-      'Domain must be a non-empty string',
-    );
-  });
-
-  test('should handle whitespace-only domain', async () => {
-    await expect(getCertificate('   ')).rejects.toThrow(
-      'Domain must be a non-empty string',
-    );
-  });
-
-  test('should format date correctly for different locales', async () => {
-    const mockCertificate = {
-      valid_to: 'Dec 25 2030 12:00:00 GMT',
-    };
-
-    mockSocket.getPeerCertificate.mockReturnValue(mockCertificate);
-
-    const mockResponse = { socket: mockSocket };
-
-    https.request.mockImplementation((options, callback) => {
-      process.nextTick(() => callback(mockResponse));
-      return mockRequest;
-    });
-
-    const result = await getCertificate('example.com');
-    // Should be German date format (DD.MM.YYYY)
-    expect(result).toMatch(/^\d{2}\.\d{2}\.\d{4}$/);
-    expect(result).toBe('25.12.2030'); // German date format
+    const info = await getCertificate('example.com');
+    expect(info.validTo).toEqual(new Date('Jan 1 2030 00:00:00 GMT'));
   });
 });

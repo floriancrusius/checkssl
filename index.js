@@ -195,26 +195,57 @@ const loadDefaultDomains = () => {
   return [];
 };
 
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
 /**
- * Check SSL certificates for all domains
- * @param {Array<string>} domainsToCheck - Array of domains to check
- * @returns {Promise<Array<{domain: string, result: string}>>} - Results of certificate checks
+ * Derive a status label from raw certificate info.
+ * @param {{ validTo: Date, authorized: boolean }} info
+ * @param {number} nowMs
+ * @returns {'valid'|'expiring_soon'|'expired'|'invalid'}
+ */
+const classifyStatus = (info, nowMs = Date.now()) => {
+  const remaining = info.validTo.getTime() - nowMs;
+  if (remaining <= 0) return 'expired';
+  if (!info.authorized) return 'invalid';
+  if (remaining <= THIRTY_DAYS_MS) return 'expiring_soon';
+  return 'valid';
+};
+
+/**
+ * Check SSL certificates for all domains.
+ * @param {Array<string>} domainsToCheck
+ * @returns {Promise<Array<import('./lib/helper').CheckResult>>}
  */
 const checkCertificates = async (domainsToCheck) => {
-  const results = await Promise.all(
+  return Promise.all(
     domainsToCheck.map(async (domain) => {
       try {
-        const result = await getCertificate(domain);
-        return { domain, result };
+        const info = await getCertificate(domain);
+        const status = classifyStatus(info);
+        if (status === 'invalid') {
+          addError(
+            `${domain}: ${info.authorizationError || 'invalid certificate'}`,
+          );
+        }
+        return {
+          domain,
+          expiresAt: info.validTo,
+          status,
+          authorizationError: info.authorizationError,
+          error: null,
+        };
       } catch (error) {
-        const errorMessage = `${domain}: ${error.message}`;
-        addError(errorMessage);
-        return { domain, result: '   Error  ' };
+        addError(`${domain}: ${error.message}`);
+        return {
+          domain,
+          expiresAt: null,
+          status: 'error',
+          authorizationError: null,
+          error: error.message,
+        };
       }
     }),
   );
-
-  return results;
 };
 
 /**

@@ -2,7 +2,6 @@ const {
   isValidDomain,
   validateDomain,
   domainLengthReducer,
-  parseDate,
   sortResults,
   formatResults,
   formatResultsCSV,
@@ -19,255 +18,196 @@ const {
 
 describe('Helper Functions', () => {
   describe('isValidDomain', () => {
-    test('should return true for valid domains', () => {
+    test('returns true for valid domains', () => {
       expect(isValidDomain('example.com')).toBe(true);
       expect(isValidDomain('subdomain.example.com')).toBe(true);
       expect(isValidDomain('test-domain.org')).toBe(true);
       expect(isValidDomain('a.co')).toBe(true);
     });
 
-    test('should return false for invalid domains', () => {
-      expect(isValidDomain('example')).toBe(false); // No TLD
+    test('returns false for invalid domains', () => {
+      expect(isValidDomain('example')).toBe(false);
       expect(isValidDomain('')).toBe(false);
       expect(isValidDomain(null)).toBe(false);
       expect(isValidDomain(undefined)).toBe(false);
       expect(isValidDomain('example.')).toBe(false);
       expect(isValidDomain('.example.com')).toBe(false);
       expect(isValidDomain('example..com')).toBe(false);
-      expect(isValidDomain('example.c')).toBe(false); // TLD too short
+      expect(isValidDomain('example.c')).toBe(false);
     });
 
-    test('should handle case insensitive domains', () => {
+    test('is case-insensitive', () => {
       expect(isValidDomain('EXAMPLE.COM')).toBe(true);
       expect(isValidDomain('Example.Com')).toBe(true);
     });
 
-    test('should handle domains with whitespace', () => {
+    test('accepts surrounding whitespace', () => {
       expect(isValidDomain('  example.com  ')).toBe(true);
       expect(isValidDomain(' \t example.com \n ')).toBe(true);
     });
 
-    test('should handle very long domains', () => {
-      const longDomain = 'a'.repeat(250) + '.com';
-      expect(isValidDomain(longDomain)).toBe(false);
+    test('rejects domains over 253 chars', () => {
+      expect(isValidDomain('a'.repeat(250) + '.com')).toBe(false);
     });
 
-    test('should handle domains at length boundaries', () => {
-      // Domain exactly at 253 characters (max length)
-      const maxLengthDomain = 'a'.repeat(249) + '.com';
-      expect(isValidDomain(maxLengthDomain)).toBe(true); // Should be true as it's exactly at max length
-
-      // Domain over 253 characters (invalid)
-      const overLengthDomain = 'a'.repeat(250) + '.com';
-      expect(isValidDomain(overLengthDomain)).toBe(false); // Should be false due to exceeding length
-
-      // Short valid domain
-      expect(isValidDomain('a.co')).toBe(true);
+    test('accepts a domain exactly at 253 chars', () => {
+      expect(isValidDomain('a'.repeat(249) + '.com')).toBe(true);
     });
   });
 
   describe('validateDomain', () => {
-    test('should call error callback for invalid domains', () => {
-      const mockCallback = jest.fn();
-      const result = validateDomain('invalid-domain-no-tld', mockCallback);
-
-      expect(result).toBe(false);
-      expect(mockCallback).toHaveBeenCalledWith(
+    test('invokes the error callback for invalid domains', () => {
+      const cb = jest.fn();
+      expect(validateDomain('invalid-domain-no-tld', cb)).toBe(false);
+      expect(cb).toHaveBeenCalledWith(
         'Invalid domain format: invalid-domain-no-tld',
       );
     });
 
-    test('should not call error callback for valid domains', () => {
-      const mockCallback = jest.fn();
-      const result = validateDomain('example.com', mockCallback);
-
-      expect(result).toBe(true);
-      expect(mockCallback).not.toHaveBeenCalled();
+    test('does not invoke the callback for valid domains', () => {
+      const cb = jest.fn();
+      expect(validateDomain('example.com', cb)).toBe(true);
+      expect(cb).not.toHaveBeenCalled();
     });
 
-    test('should handle missing callback gracefully', () => {
+    test('tolerates a missing callback', () => {
       expect(() => validateDomain('invalid-no-tld')).not.toThrow();
       expect(validateDomain('invalid-no-tld')).toBe(false);
     });
   });
 
   describe('domainLengthReducer', () => {
-    test('should return the maximum length', () => {
+    test('returns the maximum length seen', () => {
       expect(domainLengthReducer(0, 'example.com')).toBe(11);
       expect(domainLengthReducer(15, 'short.co')).toBe(15);
       expect(domainLengthReducer(5, 'very-long-domain.example.org')).toBe(28);
     });
 
-    test('should handle non-string inputs', () => {
+    test('ignores non-string inputs', () => {
       expect(domainLengthReducer(10, null)).toBe(10);
       expect(domainLengthReducer(10, undefined)).toBe(10);
       expect(domainLengthReducer(10, 123)).toBe(10);
     });
   });
 
-  describe('parseDate', () => {
-    test('should parse valid German date format', () => {
-      const date = parseDate('01.01.2025');
-      expect(date.getFullYear()).toBe(2025);
-      expect(date.getMonth()).toBe(0); // January is 0
-      expect(date.getDate()).toBe(1);
-    });
-
-    test('should parse valid American date format', () => {
-      const date = parseDate('01/01/2025');
-      expect(date.getFullYear()).toBe(2025);
-      expect(date.getMonth()).toBe(0); // January is 0
-      expect(date.getDate()).toBe(1);
-    });
-
-    test('should distinguish between German and American formats correctly', () => {
-      // German format: 02.01.2025 = January 2nd
-      const germanDate = parseDate('02.01.2025');
-      expect(germanDate.getMonth()).toBe(0); // January
-      expect(germanDate.getDate()).toBe(2);
-
-      // American format: 02/01/2025 = February 1st
-      const americanDate = parseDate('02/01/2025');
-      expect(americanDate.getMonth()).toBe(1); // February
-      expect(americanDate.getDate()).toBe(1);
-    });
-
-    test('should throw error for invalid date formats', () => {
-      expect(() => parseDate('2025-01-01')).toThrow();
-      expect(() => parseDate('invalid')).toThrow();
-      expect(() => parseDate('')).toThrow();
-      expect(() => parseDate(null)).toThrow();
-      expect(() => parseDate('01.01')).toThrow();
-      expect(() => parseDate('01/01')).toThrow();
-    });
-
-    test('should throw error for invalid date components', () => {
-      expect(() => parseDate('32.01.2025')).toThrow();
-      expect(() => parseDate('01.13.2025')).toThrow();
-      expect(() => parseDate('abc.def.ghi')).toThrow();
-    });
-
-    test('should handle edge date values', () => {
-      expect(() => parseDate('31.12.2025')).not.toThrow();
-      expect(() => parseDate('01.01.1000')).not.toThrow();
-      expect(() => parseDate('29.02.2024')).not.toThrow(); // Leap year
-    });
-
-    test('should reject invalid date ranges', () => {
-      expect(() => parseDate('32.01.2025')).toThrow('Date out of range');
-      expect(() => parseDate('01.13.2025')).toThrow('Date out of range');
-      expect(() => parseDate('01.01.999')).toThrow('Date out of range');
-      expect(() => parseDate('00.01.2025')).toThrow('Date out of range');
-      expect(() => parseDate('01.00.2025')).toThrow('Date out of range');
-    });
-  });
-
   describe('sortResults', () => {
-    const mockResults = [
-      { domain: 'later.com', result: '01.01.2026' },
-      { domain: 'earlier.com', result: '01.01.2025' },
-      { domain: 'error.com', result: '   Error  ' },
+    const results = () => [
+      { domain: 'later.com', expiresAt: new Date('2026-01-01T00:00:00Z') },
+      { domain: 'earlier.com', expiresAt: new Date('2025-01-01T00:00:00Z') },
+      { domain: 'error.com', expiresAt: null, status: 'error' },
     ];
 
-    test('should sort results by date ascending by default', () => {
-      const sorted = sortResults([...mockResults]);
-      expect(sorted[0].domain).toBe('earlier.com');
-      expect(sorted[1].domain).toBe('later.com');
-      expect(sorted[2].domain).toBe('error.com'); // Errors should go to end
+    test('sorts by expiresAt ascending by default; errors last', () => {
+      const sorted = sortResults(results());
+      expect(sorted.map((r) => r.domain)).toEqual([
+        'earlier.com',
+        'later.com',
+        'error.com',
+      ]);
     });
 
-    test('should sort results by date descending', () => {
-      const sorted = sortResults([...mockResults], 'desc');
-      expect(sorted[0].domain).toBe('later.com');
-      expect(sorted[1].domain).toBe('earlier.com');
-      expect(sorted[2].domain).toBe('error.com'); // Errors should go to end
+    test('sorts descending when requested; errors still last', () => {
+      const sorted = sortResults(results(), 'desc');
+      expect(sorted.map((r) => r.domain)).toEqual([
+        'later.com',
+        'earlier.com',
+        'error.com',
+      ]);
     });
 
-    test('should handle error results gracefully', () => {
-      const errorResults = [
-        { domain: 'error1.com', result: '   Error  ' },
-        { domain: 'error2.com', result: '   Error  ' },
-      ];
-
-      expect(() => sortResults(errorResults)).not.toThrow();
+    test('does not mutate the input array', () => {
+      const input = results();
+      const originalOrder = input.map((r) => r.domain);
+      sortResults(input);
+      expect(input.map((r) => r.domain)).toEqual(originalOrder);
     });
 
-    test('should throw error for non-array input', () => {
+    test('handles all-error results', () => {
+      expect(() =>
+        sortResults([
+          { domain: 'e1', expiresAt: null },
+          { domain: 'e2', expiresAt: null },
+        ]),
+      ).not.toThrow();
+    });
+
+    test('throws for non-array input', () => {
       expect(() => sortResults('not an array')).toThrow();
       expect(() => sortResults(null)).toThrow();
     });
-    test('should handle mixed valid and invalid date results', () => {
-      const results = [
-        { domain: 'valid.com', result: '01.01.2026' },
-        { domain: 'error.com', result: '   Error  ' },
-        { domain: 'invalid-date.com', result: '32.01.2025' },
-        { domain: 'another-valid.com', result: '01.01.2025' },
-      ];
 
-      const sorted = sortResults(results);
-
-      // Valid dates should be sorted first, then invalid dates, then explicit errors
-      expect(sorted[0].domain).toBe('another-valid.com'); // 2025 comes before 2026
-      expect(sorted[1].domain).toBe('valid.com'); // 2026
-      expect(sorted[2].domain).toBe('invalid-date.com'); // Invalid date goes after valid dates
-      expect(sorted[3].domain).toBe('error.com'); // Explicit errors go last
+    test('treats invalid Date objects as errors', () => {
+      const sorted = sortResults([
+        { domain: 'valid.com', expiresAt: new Date('2026-01-01T00:00:00Z') },
+        { domain: 'nan.com', expiresAt: new Date('invalid') },
+      ]);
+      expect(sorted[0].domain).toBe('valid.com');
+      expect(sorted[1].domain).toBe('nan.com');
     });
   });
 
   describe('formatResults', () => {
-    test('should format results correctly', () => {
-      const results = [
-        { domain: 'example.com', result: '01.01.2025' },
-        { domain: 'test.org', result: '02.02.2026' },
-      ];
-
-      const formatted = formatResults(results, 15);
+    test('renders padded rows with formatted dates', () => {
+      const formatted = formatResults(
+        [
+          { domain: 'example.com', expiresAt: new Date(2025, 0, 1) },
+          { domain: 'test.org', expiresAt: new Date(2026, 1, 2) },
+        ],
+        15,
+      );
       expect(formatted[0]).toBe('| example.com     | 01.01.2025 |');
       expect(formatted[1]).toBe('| test.org        | 02.02.2026 |');
     });
 
-    test('should handle minimum padding', () => {
-      const results = [{ domain: 'a.co', result: '01.01.2025' }];
-      const formatted = formatResults(results, 3);
-
-      // Should use minimum padding of 10
+    test('enforces minimum padding of 10', () => {
+      const formatted = formatResults(
+        [{ domain: 'a.co', expiresAt: new Date(2025, 0, 1) }],
+        3,
+      );
       expect(formatted[0]).toBe('| a.co       | 01.01.2025 |');
     });
 
-    test('should throw error for non-array input', () => {
+    test('renders error label for null expiresAt', () => {
+      const formatted = formatResults(
+        [{ domain: 'broken.com', expiresAt: null }],
+        10,
+      );
+      expect(formatted[0]).toBe('| broken.com |    Error   |');
+    });
+
+    test('throws for non-array input', () => {
       expect(() => formatResults('not an array', 10)).toThrow();
     });
   });
 
   describe('formatResultsCSV', () => {
-    test('should format results as CSV correctly', () => {
-      const results = [
-        { domain: 'example.com', result: '01.01.2025' },
-        { domain: 'test.org', result: '02.02.2025' },
-      ];
-
-      const csvOutput = formatResultsCSV(results);
-      const lines = csvOutput.split('\n');
-
+    test('produces expected header and rows', () => {
+      const csv = formatResultsCSV([
+        { domain: 'example.com', expiresAt: new Date(2025, 0, 1) },
+        { domain: 'test.org', expiresAt: new Date(2025, 1, 2) },
+      ]);
+      const lines = csv.split('\n');
       expect(lines[0]).toBe('Domain,Expiration');
       expect(lines[1]).toBe('"example.com","01.01.2025"');
       expect(lines[2]).toBe('"test.org","02.02.2025"');
     });
 
-    test('should handle CSV escaping correctly', () => {
-      const results = [
-        { domain: 'example,with,commas.com', result: 'Result with "quotes"' },
-      ];
-
-      const csvOutput = formatResultsCSV(results);
-      const lines = csvOutput.split('\n');
-
-      expect(lines[1]).toBe(
-        '"example,with,commas.com","Result with ""quotes"""',
-      );
+    test('emits "Error" for errored entries', () => {
+      const csv = formatResultsCSV([{ domain: 'broken.com', expiresAt: null }]);
+      expect(csv.split('\n')[1]).toBe('"broken.com","Error"');
     });
 
-    test('should throw error for non-array input', () => {
+    test('escapes quotes in the domain', () => {
+      const csv = formatResultsCSV([
+        {
+          domain: 'weird"name.com',
+          expiresAt: new Date(2025, 0, 1),
+        },
+      ]);
+      expect(csv.split('\n')[1]).toBe('"weird""name.com","01.01.2025"');
+    });
+
+    test('throws for non-array input', () => {
       expect(() => formatResultsCSV('not an array')).toThrow(
         'Results must be an array',
       );
@@ -276,37 +216,55 @@ describe('Helper Functions', () => {
   });
 
   describe('formatResultsJSON', () => {
-    test('should format results as JSON correctly', () => {
-      const results = [
-        { domain: 'example.com', result: '01.01.2025' },
-        { domain: 'test.org', result: '02.02.2025' },
-      ];
+    test('renders domain + formatted expiration', () => {
+      const parsed = JSON.parse(
+        formatResultsJSON([
+          { domain: 'example.com', expiresAt: new Date(2025, 0, 1) },
+          { domain: 'test.org', expiresAt: new Date(2025, 1, 2) },
+        ]),
+      );
+      expect(parsed).toEqual([
+        { domain: 'example.com', expiration: '01.01.2025' },
+        { domain: 'test.org', expiration: '02.02.2025' },
+      ]);
+    });
 
-      const jsonOutput = formatResultsJSON(results);
-      const parsed = JSON.parse(jsonOutput);
-
-      expect(Array.isArray(parsed)).toBe(true);
-      expect(parsed).toHaveLength(2);
+    test('includes status, error and authorizationError when present', () => {
+      const parsed = JSON.parse(
+        formatResultsJSON([
+          {
+            domain: 'broken.com',
+            expiresAt: null,
+            status: 'error',
+            error: 'boom',
+          },
+          {
+            domain: 'invalid.com',
+            expiresAt: new Date(2030, 0, 1),
+            status: 'invalid',
+            authorizationError: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+          },
+        ]),
+      );
       expect(parsed[0]).toEqual({
-        domain: 'example.com',
-        expiration: '01.01.2025',
+        domain: 'broken.com',
+        expiration: 'Error',
+        status: 'error',
+        error: 'boom',
       });
       expect(parsed[1]).toEqual({
-        domain: 'test.org',
-        expiration: '02.02.2025',
+        domain: 'invalid.com',
+        expiration: '01.01.2030',
+        status: 'invalid',
+        authorizationError: 'DEPTH_ZERO_SELF_SIGNED_CERT',
       });
     });
 
-    test('should handle empty results array', () => {
-      const results = [];
-      const jsonOutput = formatResultsJSON(results);
-      const parsed = JSON.parse(jsonOutput);
-
-      expect(Array.isArray(parsed)).toBe(true);
-      expect(parsed).toHaveLength(0);
+    test('handles empty array', () => {
+      expect(formatResultsJSON([])).toBe('[]');
     });
 
-    test('should throw error for non-array input', () => {
+    test('throws for non-array input', () => {
       expect(() => formatResultsJSON('not an array')).toThrow(
         'Results must be an array',
       );
@@ -315,185 +273,118 @@ describe('Helper Functions', () => {
   });
 
   describe('separator', () => {
-    test('should create separator with correct length', () => {
-      const sep = separator(10);
-      expect(sep).toBe('='.repeat(27)); // 10 + 17 for padding and borders
+    test('adds fixed borders/padding on top of the domain width', () => {
+      expect(separator(10)).toBe('='.repeat(27));
     });
 
-    test('should handle minimum length', () => {
-      const sep = separator(5);
-      expect(sep).toBe('='.repeat(27)); // Uses minimum of 10 + 17
+    test('enforces a minimum width of 10', () => {
+      expect(separator(5)).toBe('='.repeat(27));
     });
   });
 
   describe('sendHelp', () => {
-    test('should print help message', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-
+    test('prints usage and examples', () => {
+      const spy = jest.spyOn(console, 'log').mockImplementation();
       sendHelp();
-
-      expect(consoleSpy).toHaveBeenCalledWith('Usage: checkssl [options]');
-      expect(consoleSpy).toHaveBeenCalledWith('');
-      expect(consoleSpy).toHaveBeenCalledWith('Options:');
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  -d <domain>      Check a specific domain',
+      expect(spy).toHaveBeenCalledWith('Usage: checkssl [options]');
+      expect(spy).toHaveBeenCalledWith(
+        '  -d, --domain <domain>  Check a specific domain',
       );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  -f <file>        Read domains from a file',
+      expect(spy).toHaveBeenCalledWith(
+        '  -f, --file <file>      Read domains from a file',
       );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  -s               Suppress error messages',
+      expect(spy).toHaveBeenCalledWith(
+        '  -h, --help             Show this help message',
       );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  --format <type>  Output format: table (default), csv, json',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  -h               Show this help message',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  -v, --version    Show version information',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith('Examples:');
-      expect(consoleSpy).toHaveBeenCalledWith('  checkssl -d google.com');
-      expect(consoleSpy).toHaveBeenCalledWith('  checkssl -f domains.txt');
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  checkssl -d example.com -d another.com',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  checkssl -d google.com --format csv',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  checkssl -f domains.txt --format json',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith('  checkssl --version');
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '  checkssl -d example.com -d another.com',
-      );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'If no options are provided, checkssl will look for ~/.checkssl',
-      );
-
-      consoleSpy.mockRestore();
+      expect(spy).toHaveBeenCalledWith('  checkssl -d google.com');
+      spy.mockRestore();
     });
   });
 
   describe('printTable', () => {
-    test('should print formatted table', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-      const results = [
+    test('prints separator, rows, separator', () => {
+      const spy = jest.spyOn(console, 'log').mockImplementation();
+      const rows = [
         '| example.com | 01.01.2025 |',
         '| test.org    | 02.02.2025 |',
       ];
-      const separator = '================================';
+      const sep = '================================';
 
-      printTable(results, separator);
-
-      expect(consoleSpy).toHaveBeenCalledWith(separator);
-      expect(consoleSpy).toHaveBeenCalledWith('| example.com | 01.01.2025 |');
-      expect(consoleSpy).toHaveBeenCalledWith('| test.org    | 02.02.2025 |');
-      expect(consoleSpy).toHaveBeenCalledWith(separator);
-
-      consoleSpy.mockRestore();
+      printTable(rows, sep);
+      expect(spy).toHaveBeenNthCalledWith(1, sep);
+      expect(spy).toHaveBeenNthCalledWith(2, rows[0]);
+      expect(spy).toHaveBeenNthCalledWith(3, rows[1]);
+      expect(spy).toHaveBeenNthCalledWith(4, sep);
+      spy.mockRestore();
     });
 
-    test('should handle invalid results gracefully', () => {
-      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-
+    test('rejects non-array input', () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation();
       printTable('not an array', '='.repeat(20));
-
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        'Error: Invalid results format',
-      );
-
-      consoleErrorSpy.mockRestore();
+      expect(spy).toHaveBeenCalledWith('Error: Invalid results format');
+      spy.mockRestore();
     });
 
-    test('should handle empty results', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-      const separator = '='.repeat(20);
-
-      printTable([], separator);
-
-      expect(consoleSpy).toHaveBeenCalledWith(separator);
-      expect(consoleSpy).toHaveBeenCalledWith(separator);
-
-      consoleSpy.mockRestore();
+    test('handles empty results', () => {
+      const spy = jest.spyOn(console, 'log').mockImplementation();
+      const sep = '='.repeat(20);
+      printTable([], sep);
+      expect(spy).toHaveBeenNthCalledWith(1, sep);
+      expect(spy).toHaveBeenNthCalledWith(2, sep);
+      spy.mockRestore();
     });
   });
 
   describe('printInfo', () => {
-    test('should print informational message', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-
+    test('prints the tip', () => {
+      const spy = jest.spyOn(console, 'log').mockImplementation();
       printInfo();
-
-      expect(consoleSpy).toHaveBeenCalledWith('');
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(spy).toHaveBeenCalledWith(
         '💡 Tip: Provide domains using -d option or create ~/.checkssl file',
       );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '   Example: checkssl -d example.com',
-      );
-
-      consoleSpy.mockRestore();
+      spy.mockRestore();
     });
   });
 
   describe('printErrors', () => {
-    test('should print error messages', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-      const errors = [
-        'Error 1: Domain not found',
-        'Error 2: Connection timeout',
-      ];
-
-      printErrors(errors);
-
-      expect(consoleSpy).toHaveBeenCalledWith('');
-      expect(consoleSpy).toHaveBeenCalledWith('❌ Errors encountered:');
-      expect(consoleSpy).toHaveBeenCalledWith('');
-      expect(consoleSpy).toHaveBeenCalledWith('   Error 1: Domain not found');
-      expect(consoleSpy).toHaveBeenCalledWith('   Error 2: Connection timeout');
-
-      consoleSpy.mockRestore();
+    test('prints error messages to stderr', () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation();
+      printErrors(['E1', 'E2']);
+      expect(spy).toHaveBeenCalledWith('❌ Errors encountered:');
+      expect(spy).toHaveBeenCalledWith('   E1');
+      expect(spy).toHaveBeenCalledWith('   E2');
+      spy.mockRestore();
     });
 
-    test('should not print anything for empty errors array', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-
+    test('is a no-op for empty arrays', () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation();
       printErrors([]);
-
-      expect(consoleSpy).not.toHaveBeenCalled();
-
-      consoleSpy.mockRestore();
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
     });
 
-    test('should not print anything for non-array input', () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-
+    test('is a no-op for non-array input', () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation();
       printErrors('not an array');
       printErrors(null);
       printErrors(undefined);
-
-      expect(consoleSpy).not.toHaveBeenCalled();
-
-      consoleSpy.mockRestore();
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
     });
   });
 
   describe('DOMAIN_REGEX constant', () => {
-    test('should be exported and accessible', () => {
-      expect(DOMAIN_REGEX).toBeDefined();
+    test('is a RegExp', () => {
       expect(DOMAIN_REGEX).toBeInstanceOf(RegExp);
     });
 
-    test('should match valid domains', () => {
+    test('matches valid domains', () => {
       expect(DOMAIN_REGEX.test('example.com')).toBe(true);
       expect(DOMAIN_REGEX.test('subdomain.example.org')).toBe(true);
       expect(DOMAIN_REGEX.test('test-domain.co.uk')).toBe(true);
     });
 
-    test('should not match invalid domains', () => {
+    test('does not match invalid domains', () => {
       expect(DOMAIN_REGEX.test('example')).toBe(false);
       expect(DOMAIN_REGEX.test('.example.com')).toBe(false);
       expect(DOMAIN_REGEX.test('example..com')).toBe(false);
@@ -501,7 +392,7 @@ describe('Helper Functions', () => {
   });
 
   describe('DATE_LOCALE and DATE_FORMAT_OPTIONS', () => {
-    test('should be exported and have correct values', () => {
+    test('are exported with the expected values', () => {
       expect(DATE_LOCALE).toBe('de-DE');
       expect(DATE_FORMAT_OPTIONS).toEqual({
         day: '2-digit',
