@@ -88,8 +88,15 @@ const parseArguments = (args) => {
     const arg = args[i];
 
     switch (arg) {
-      case '-f': {
+      case '-f':
+      case '--file': {
         const filePath = args[i + 1];
+        if (filePath?.startsWith('-')) {
+          addError('Syntax error: Expected file path after -f option');
+          sendHelp();
+          i = args.length; // Exit loop
+          break;
+        }
         if (!filePath) {
           addError('Missing file path after -f option');
           break;
@@ -102,8 +109,15 @@ const parseArguments = (args) => {
         break;
       }
 
-      case '-d': {
+      case '-d':
+      case '--domain': {
         const domain = args[i + 1];
+        if (domain?.startsWith('-')) {
+          addError('Syntax error: Expected domain after -d option');
+          sendHelp();
+          i = args.length; // Exit loop
+          break;
+        }
         if (!domain) {
           addError('Missing domain after -d option');
           break;
@@ -124,6 +138,12 @@ const parseArguments = (args) => {
 
       case '--format': {
         const format = args[i + 1];
+        if (format?.startsWith('-')) {
+          addError('Syntax error: Expected format after --format option');
+          sendHelp();
+          i = args.length; // Exit loop
+          break;
+        }
         if (!format) {
           addError('Missing format after --format option');
           break;
@@ -141,6 +161,7 @@ const parseArguments = (args) => {
       }
 
       case '-h':
+      case '--help':
         sendHelp();
         exit(EXIT_CODES.SUCCESS);
       // falls through - unreachable due to exit()
