@@ -147,32 +147,57 @@ describe('Helper Functions', () => {
   });
 
   describe('formatResults', () => {
-    test('renders padded rows with formatted dates', () => {
+    // Fix "now" so days-until-expiry is deterministic.
+    const NOW = new Date(2025, 0, 1).getTime();
+
+    test('renders padded rows with date and days-until-expiry column', () => {
       const formatted = formatResults(
         [
-          { domain: 'example.com', expiresAt: new Date(2025, 0, 1) },
+          { domain: 'example.com', expiresAt: new Date(2025, 1, 12) },
           { domain: 'test.org', expiresAt: new Date(2026, 1, 2) },
         ],
         15,
+        NOW,
       );
-      expect(formatted[0]).toBe('| example.com     | 01.01.2025 |');
-      expect(formatted[1]).toBe('| test.org        | 02.02.2026 |');
+      expect(formatted[0]).toBe(
+        '| example.com     | 12.02.2025 |        in 42 days |',
+      );
+      expect(formatted[1]).toBe(
+        '| test.org        | 02.02.2026 |       in 397 days |',
+      );
     });
 
     test('enforces minimum padding of 10', () => {
       const formatted = formatResults(
-        [{ domain: 'a.co', expiresAt: new Date(2025, 0, 1) }],
+        [{ domain: 'a.co', expiresAt: new Date(2025, 1, 12) }],
         3,
+        NOW,
       );
-      expect(formatted[0]).toBe('| a.co       | 01.01.2025 |');
+      expect(formatted[0]).toBe(
+        '| a.co       | 12.02.2025 |        in 42 days |',
+      );
     });
 
-    test('renders error label for null expiresAt', () => {
+    test('renders error label and N/A days for null expiresAt', () => {
       const formatted = formatResults(
         [{ domain: 'broken.com', expiresAt: null }],
         10,
+        NOW,
       );
-      expect(formatted[0]).toBe('| broken.com |    Error   |');
+      expect(formatted[0]).toBe(
+        '| broken.com |    Error   |               N/A |',
+      );
+    });
+
+    test('shows "expired Xd ago" for past dates', () => {
+      const formatted = formatResults(
+        [{ domain: 'gone.com', expiresAt: new Date(2020, 0, 1) }],
+        10,
+        NOW,
+      );
+      expect(formatted[0]).toBe(
+        '| gone.com   | 01.01.2020 | expired 1827d ago |',
+      );
     });
 
     test('throws for non-array input', () => {
@@ -181,30 +206,41 @@ describe('Helper Functions', () => {
   });
 
   describe('formatResultsCSV', () => {
-    test('produces expected header and rows', () => {
-      const csv = formatResultsCSV([
-        { domain: 'example.com', expiresAt: new Date(2025, 0, 1) },
-        { domain: 'test.org', expiresAt: new Date(2025, 1, 2) },
-      ]);
+    const NOW = new Date(2025, 0, 1).getTime();
+
+    test('produces expected header and rows with days column', () => {
+      const csv = formatResultsCSV(
+        [
+          { domain: 'example.com', expiresAt: new Date(2025, 1, 12) },
+          { domain: 'test.org', expiresAt: new Date(2025, 1, 2) },
+        ],
+        NOW,
+      );
       const lines = csv.split('\n');
-      expect(lines[0]).toBe('Domain,Expiration');
-      expect(lines[1]).toBe('"example.com","01.01.2025"');
-      expect(lines[2]).toBe('"test.org","02.02.2025"');
+      expect(lines[0]).toBe('Domain,Expiration,DaysUntilExpiry');
+      expect(lines[1]).toBe('"example.com","12.02.2025",42');
+      expect(lines[2]).toBe('"test.org","02.02.2025",32');
     });
 
-    test('emits "Error" for errored entries', () => {
-      const csv = formatResultsCSV([{ domain: 'broken.com', expiresAt: null }]);
-      expect(csv.split('\n')[1]).toBe('"broken.com","Error"');
+    test('emits Error and empty days for errored entries', () => {
+      const csv = formatResultsCSV(
+        [{ domain: 'broken.com', expiresAt: null }],
+        NOW,
+      );
+      expect(csv.split('\n')[1]).toBe('"broken.com","Error",');
     });
 
     test('escapes quotes in the domain', () => {
-      const csv = formatResultsCSV([
-        {
-          domain: 'weird"name.com',
-          expiresAt: new Date(2025, 0, 1),
-        },
-      ]);
-      expect(csv.split('\n')[1]).toBe('"weird""name.com","01.01.2025"');
+      const csv = formatResultsCSV(
+        [
+          {
+            domain: 'weird"name.com',
+            expiresAt: new Date(2025, 0, 1),
+          },
+        ],
+        NOW,
+      );
+      expect(csv.split('\n')[1]).toBe('"weird""name.com","01.01.2025",0');
     });
 
     test('throws for non-array input', () => {
@@ -216,45 +252,59 @@ describe('Helper Functions', () => {
   });
 
   describe('formatResultsJSON', () => {
-    test('renders domain + formatted expiration', () => {
+    const NOW = new Date(2025, 0, 1).getTime();
+
+    test('renders domain, expiration and daysUntilExpiry', () => {
       const parsed = JSON.parse(
-        formatResultsJSON([
-          { domain: 'example.com', expiresAt: new Date(2025, 0, 1) },
-          { domain: 'test.org', expiresAt: new Date(2025, 1, 2) },
-        ]),
+        formatResultsJSON(
+          [
+            { domain: 'example.com', expiresAt: new Date(2025, 1, 12) },
+            { domain: 'test.org', expiresAt: new Date(2025, 1, 2) },
+          ],
+          NOW,
+        ),
       );
       expect(parsed).toEqual([
-        { domain: 'example.com', expiration: '01.01.2025' },
-        { domain: 'test.org', expiration: '02.02.2025' },
+        {
+          domain: 'example.com',
+          expiration: '12.02.2025',
+          daysUntilExpiry: 42,
+        },
+        { domain: 'test.org', expiration: '02.02.2025', daysUntilExpiry: 32 },
       ]);
     });
 
     test('includes status, error and authorizationError when present', () => {
       const parsed = JSON.parse(
-        formatResultsJSON([
-          {
-            domain: 'broken.com',
-            expiresAt: null,
-            status: 'error',
-            error: 'boom',
-          },
-          {
-            domain: 'invalid.com',
-            expiresAt: new Date(2030, 0, 1),
-            status: 'invalid',
-            authorizationError: 'DEPTH_ZERO_SELF_SIGNED_CERT',
-          },
-        ]),
+        formatResultsJSON(
+          [
+            {
+              domain: 'broken.com',
+              expiresAt: null,
+              status: 'error',
+              error: 'boom',
+            },
+            {
+              domain: 'invalid.com',
+              expiresAt: new Date(2030, 0, 1),
+              status: 'invalid',
+              authorizationError: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+            },
+          ],
+          NOW,
+        ),
       );
       expect(parsed[0]).toEqual({
         domain: 'broken.com',
         expiration: 'Error',
+        daysUntilExpiry: null,
         status: 'error',
         error: 'boom',
       });
       expect(parsed[1]).toEqual({
         domain: 'invalid.com',
         expiration: '01.01.2030',
+        daysUntilExpiry: 1826,
         status: 'invalid',
         authorizationError: 'DEPTH_ZERO_SELF_SIGNED_CERT',
       });
@@ -273,12 +323,13 @@ describe('Helper Functions', () => {
   });
 
   describe('separator', () => {
-    test('adds fixed borders/padding on top of the domain width', () => {
-      expect(separator(10)).toBe('='.repeat(27));
+    test('spans domain + date column + days column + borders', () => {
+      // 10 (domain) + 17 (days col) + 20 (padding & borders) = 47
+      expect(separator(10)).toBe('='.repeat(47));
     });
 
     test('enforces a minimum width of 10', () => {
-      expect(separator(5)).toBe('='.repeat(27));
+      expect(separator(5)).toBe('='.repeat(47));
     });
   });
 
