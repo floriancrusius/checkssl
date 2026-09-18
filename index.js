@@ -196,6 +196,7 @@ const loadDefaultDomains = () => {
 };
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_CONCURRENCY = 20;
 
 /**
  * Derive a status label from raw certificate info.
@@ -212,41 +213,66 @@ const classifyStatus = (info, nowMs = Date.now()) => {
 };
 
 /**
- * Check SSL certificates for all domains.
+ * Run an async worker over items with a fixed concurrency limit.
+ * Preserves input order in the result.
+ * @template T, R
+ * @param {T[]} items
+ * @param {number} limit
+ * @param {(item: T, index: number) => Promise<R>} worker
+ * @returns {Promise<R[]>}
+ */
+const mapWithConcurrency = async (items, limit, worker) => {
+  const results = new Array(items.length);
+  const width = Math.max(1, Math.min(limit, items.length));
+  let cursor = 0;
+
+  const runners = Array.from({ length: width }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+};
+
+const checkOne = async (domain) => {
+  try {
+    const info = await getCertificate(domain);
+    const status = classifyStatus(info);
+    if (status === 'invalid') {
+      addError(
+        `${domain}: ${info.authorizationError || 'invalid certificate'}`,
+      );
+    }
+    return {
+      domain,
+      expiresAt: info.validTo,
+      status,
+      authorizationError: info.authorizationError,
+      error: null,
+    };
+  } catch (error) {
+    addError(`${domain}: ${error.message}`);
+    return {
+      domain,
+      expiresAt: null,
+      status: 'error',
+      authorizationError: null,
+      error: error.message,
+    };
+  }
+};
+
+/**
+ * Check SSL certificates for all domains, capped at `concurrency` in flight.
  * @param {Array<string>} domainsToCheck
+ * @param {number} [concurrency=DEFAULT_CONCURRENCY]
  * @returns {Promise<Array<import('./lib/helper').CheckResult>>}
  */
-const checkCertificates = async (domainsToCheck) => {
-  return Promise.all(
-    domainsToCheck.map(async (domain) => {
-      try {
-        const info = await getCertificate(domain);
-        const status = classifyStatus(info);
-        if (status === 'invalid') {
-          addError(
-            `${domain}: ${info.authorizationError || 'invalid certificate'}`,
-          );
-        }
-        return {
-          domain,
-          expiresAt: info.validTo,
-          status,
-          authorizationError: info.authorizationError,
-          error: null,
-        };
-      } catch (error) {
-        addError(`${domain}: ${error.message}`);
-        return {
-          domain,
-          expiresAt: null,
-          status: 'error',
-          authorizationError: null,
-          error: error.message,
-        };
-      }
-    }),
-  );
-};
+const checkCertificates = (domainsToCheck, concurrency = DEFAULT_CONCURRENCY) =>
+  mapWithConcurrency(domainsToCheck, concurrency, checkOne);
 
 /**
  * Display results in the specified format
