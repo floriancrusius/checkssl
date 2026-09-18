@@ -9,10 +9,10 @@ BINARY_NAME = checkssl
 
 # Set the target based on the operating system
 ifeq ($(OS), Linux)
-	TARGET = node18-linux-x64
+	TARGET = node22-linux-x64
 	BINARY_SUFFIX = -linux
 else ifeq ($(OS), Darwin)
-	TARGET = node18-macos-x64
+	TARGET = node22-macos-x64
 	BINARY_SUFFIX = -macos
 else
 	$(error Unsupported OS: $(OS))
