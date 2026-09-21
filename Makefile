@@ -49,8 +49,11 @@ test-race:
 	go test -race ./...
 
 lint:
-	go vet ./...
-	gofmt -l . | grep -v '^$$' && exit 1 || true
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not found — install with: brew install golangci-lint"; \
+		exit 1; \
+	fi
+	golangci-lint run ./...
 
 tidy:
 	go mod tidy

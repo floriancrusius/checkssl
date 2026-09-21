@@ -16,14 +16,14 @@ import (
 type Status string
 
 const (
-	StatusValid         Status = "valid"
-	StatusExpiringSoon  Status = "expiring_soon"
-	StatusExpired       Status = "expired"
-	StatusInvalid       Status = "invalid"
-	StatusError         Status = "error"
-	ExpiringSoonWindow         = 30 * 24 * time.Hour
-	defaultTimeout             = 5 * time.Second
-	defaultPort                = "443"
+	StatusValid        Status = "valid"
+	StatusExpiringSoon Status = "expiring_soon"
+	StatusExpired      Status = "expired"
+	StatusInvalid      Status = "invalid"
+	StatusError        Status = "error"
+	ExpiringSoonWindow        = 30 * 24 * time.Hour
+	defaultTimeout            = 5 * time.Second
+	defaultPort               = "443"
 )
 
 // Result is what a single Check call returns.
@@ -45,6 +45,9 @@ type Options struct {
 	Now time.Time
 	// Dialer lets tests substitute the network layer.
 	Dialer Dialer
+	// RootCAs overrides the system trust store for the manual verification
+	// step. Leave nil to use the system pool.
+	RootCAs *x509.CertPool
 }
 
 // Dialer abstracts a TLS dialer so tests can inject a fake.
@@ -56,7 +59,7 @@ func defaultDialer(ctx context.Context, host, port string, cfg *tls.Config) (*tl
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	state := conn.ConnectionState()
 	return &state, nil
 }
@@ -94,8 +97,11 @@ func Check(ctx context.Context, domain string, opts Options) Result {
 	defer cancel()
 
 	cfg := &tls.Config{
-		ServerName:         domain,
-		InsecureSkipVerify: true, // we verify manually below to keep the cert
+		ServerName: domain,
+		// We skip Go's built-in verification and run leaf.Verify ourselves so
+		// that expired / self-signed / hostname-mismatched certs come back
+		// as data (Status + AuthError) instead of connection errors.
+		InsecureSkipVerify: true, //nolint:gosec // manual verification below
 		MinVersion:         tls.VersionTLS12,
 	}
 
@@ -124,6 +130,7 @@ func Check(ctx context.Context, domain string, opts Options) Result {
 	_, verifyErr := leaf.Verify(x509.VerifyOptions{
 		DNSName:       domain,
 		Intermediates: intermediates,
+		Roots:         opts.RootCAs, // nil → system pool
 		CurrentTime:   now,
 	})
 	if verifyErr != nil {

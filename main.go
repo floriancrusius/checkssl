@@ -26,14 +26,14 @@ import (
 var Version = "dev"
 
 const (
-	defaultConfigFile   = ".checkssl"
-	defaultDomain       = "google.com"
-	defaultFormat       = "table"
-	defaultConcurrency  = 100
-	defaultTimeoutSecs  = 5
-	exitCodeSuccess     = 0
-	exitCodeError       = 1
-	exitCodeUsageError  = 2
+	defaultConfigFile  = ".checkssl"
+	defaultDomain      = "google.com"
+	defaultFormat      = "table"
+	defaultConcurrency = 100
+	defaultTimeoutSecs = 5
+	exitCodeSuccess    = 0
+	exitCodeError      = 1
+	exitCodeUsageError = 2
 )
 
 // domainRegex matches the same shapes the JS version accepted.
@@ -140,9 +140,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// Non-zero exit if any domain came back as expired / invalid / errored.
 	for _, r := range results {
-		if r.Status == cert.StatusExpired ||
-			r.Status == cert.StatusInvalid ||
-			r.Status == cert.StatusError {
+		switch r.Status {
+		case cert.StatusExpired, cert.StatusInvalid, cert.StatusError:
 			return exitCodeError
 		}
 	}
@@ -239,6 +238,7 @@ func collectDomains(opts cliOptions, addErr func(string)) (domains []string, sou
 }
 
 func readDomainsFromFile(path string, addErr func(string)) []string {
+	//nolint:gosec // path comes from the user via -f/--file; that is the intended use.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		addErr(fmt.Sprintf("read %s: %v", path, err))
@@ -287,16 +287,17 @@ func checkAll(ctx context.Context, domains []string, opts cliOptions, addErr fun
 			defer func() { <-sem }()
 			r := cert.Check(ctx, d, cert.Options{Timeout: opts.timeout})
 			results[i] = r
-			if r.Status == cert.StatusError {
+			switch r.Status {
+			case cert.StatusError:
 				mu.Lock()
 				addErr(fmt.Sprintf("%s: %s", d, r.Err))
 				mu.Unlock()
-			} else if r.Status == cert.StatusInvalid {
-				mu.Lock()
+			case cert.StatusInvalid:
 				msg := r.AuthError
 				if msg == "" {
 					msg = "invalid certificate"
 				}
+				mu.Lock()
 				addErr(fmt.Sprintf("%s: %s", d, msg))
 				mu.Unlock()
 			}
