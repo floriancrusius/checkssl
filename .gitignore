@@ -26,3 +26,6 @@ coverage.out
 # Temporary folders
 tmp/
 temp/
+
+# Local backups (of user configuration snapshotted for reference)
+backup/
