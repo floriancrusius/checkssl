@@ -26,6 +26,13 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - (io.Writer).Write
+  exclusions:
+    rules:
+      # Test fixtures don't need production-tight file permissions.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: 'G30[0-9]'
 
 formatters:
   enable:

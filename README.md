@@ -83,7 +83,7 @@ checkssl -f domains.txt --concurrency 200
 | `-d, --domain <domain>`       | check one domain (repeatable)                       |
 | `-f, --file <file>`           | read one domain per line from a file                |
 | `-s, --silent`                | suppress the error summary                          |
-| `    --format <type>`         | `table` (default), `csv`, `json`, `nagios`          |
+| `    --format <type>`         | `table` (default), `csv`, `json`, `nagios`, `html`  |
 | `    --concurrency <n>`       | max parallel TLS handshakes (default `100`)         |
 | `    --timeout <dur>`         | per-domain handshake timeout (default `5s`)         |
 | `    --nagios-warning <n>`    | warn threshold in days (default `30`, nagios only)  |
@@ -110,6 +110,32 @@ www.example.com
 staging.example.com     # rotated 2026-08
 ```
 
+### Include directive
+
+Lines starting with `@include <path>` pull in another file, or a glob of
+files. Paths may be absolute, start with `~/` (home-expanded), or resolve
+relative to the including file. Glob patterns (`*`, `?`, `[…]`) are
+matched and visited in sorted order; directories are silently skipped;
+include cycles are detected and reported.
+
+```
+# ~/.checkssl
+@include ~/.domains/*.list
+
+# extra domains that don't live in a group file yet
+staging.example.com
+```
+
+Handy for splitting a big list by customer, project, or environment:
+
+```
+~/.domains/
+├── customer-a.list
+├── customer-b.list
+├── production.list
+└── staging.list
+```
+
 ## Output formats
 
 ### `table` (default)
@@ -129,6 +155,17 @@ Script-friendly, header row included.
 Domain,Expiration,DaysUntilExpiry
 api.example.com,27.11.2026,67
 www.example.com,03.01.2026,102
+```
+
+### `html`
+
+Standalone HTML report with inline CSS, dark-mode support, and a
+click-to-sort table. Suitable for emailing, dropping into a static file
+server, or printing. No external assets — one `.html` file, no CDN.
+
+```
+checkssl -f ~/.checkssl --format html > report.html
+open report.html
 ```
 
 ### `nagios`

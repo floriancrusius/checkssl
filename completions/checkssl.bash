@@ -11,7 +11,7 @@ _checkssl() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     flags='-d --domain -f --file -s --silent --format --concurrency --timeout --nagios-warning --nagios-critical -h --help -v --version'
-    formats='table csv json nagios'
+    formats='table csv json nagios html'
 
     case "$prev" in
         --format)

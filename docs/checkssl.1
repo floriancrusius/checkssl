@@ -38,7 +38,7 @@ Suppress the error summary written to stderr.
 .TP
 .BR \-\-format " " \fIFORMAT\fR
 Output format. One of
-.BR table " (default), " csv ", " json ", " nagios .
+.BR table " (default), " csv ", " json ", " nagios ", " html .
 See
 .B OUTPUT FORMATS
 below.
@@ -80,6 +80,25 @@ if it exists (one domain per line,
 .RB \(oq # \(cq
 starts a comment). If that file is absent, a single default domain is
 checked.
+.PP
+Lines of the form
+.BI "@include " path
+pull in another file or a glob of files. The path may be absolute, may
+start with
+.RB \(oq ~/ \(cq
+(expanded to the user's home directory), or is otherwise resolved
+relative to the including file. Glob patterns
+.RB ( * ", " ? ", " [...] )
+are expanded and matches are visited in sorted order; directories are
+silently skipped. Include cycles are detected and reported. Example:
+.PP
+.RS
+.EX
+# ~/.checkssl
+@include ~/.domains/*.list
+extra.example
+.EE
+.RE
 .SH "OUTPUT FORMATS"
 .SS table
 Human-readable, three-column table with a coloured
@@ -98,6 +117,10 @@ Pretty-printed array of objects with
 and optional
 .BR authorizationError " / " error
 fields.
+.SS html
+Standalone HTML report with inline CSS, dark-mode support and a
+click-to-sort table. Suitable for saving to a file, attaching to
+an email or serving from a static file server.
 .SS nagios
 Single-line plugin output:
 .PP

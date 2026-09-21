@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -98,9 +99,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch opts.format {
-	case "table", "csv", "json", "nagios":
+	case "table", "csv", "json", "nagios", "html":
 	default:
-		fmt.Fprintf(stderr, "error: invalid format %q — expected table, csv, json, or nagios\n", opts.format)
+		fmt.Fprintf(stderr, "error: invalid format %q — expected table, csv, json, nagios, or html\n", opts.format)
 		return exitCodeUsageError
 	}
 
@@ -158,6 +159,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		// Nagios plugins own the exit code: 0/1/2/3 = OK/WARN/CRIT/UNKNOWN.
 		return int(status)
+	case "html":
+		if err := render.HTML(stdout, sorted, render.HTMLOptions{}); err != nil {
+			fmt.Fprintln(stderr, "error rendering HTML:", err)
+			return exitCodeError
+		}
 	default:
 		if err := render.Table(stdout, sorted, render.TableOptions{ColorEnabled: colorEnabled}); err != nil {
 			fmt.Fprintln(stderr, "error rendering table:", err)
@@ -223,7 +229,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -d, --domain <domain>   check a specific domain (repeatable)")
 	fmt.Fprintln(w, "  -f, --file <file>       read one domain per line from a file (repeatable)")
 	fmt.Fprintln(w, "  -s, --silent            suppress error output")
-	fmt.Fprintln(w, "      --format <type>     output format: table (default), csv, json, nagios")
+	fmt.Fprintln(w, "      --format <type>     output format: table (default), csv, json, nagios, html")
 	fmt.Fprintln(w, "      --concurrency <n>   max parallel TLS handshakes (default 100)")
 	fmt.Fprintln(w, "      --timeout <dur>     per-domain handshake timeout (default 5s)")
 	fmt.Fprintln(w, "      --nagios-warning <n>   days threshold (default 30, --format nagios only)")
@@ -273,12 +279,32 @@ func collectDomains(opts cliOptions, addErr func(string)) (domains []string, sou
 }
 
 func readDomainsFromFile(path string, addErr func(string)) []string {
-	//nolint:gosec // path comes from the user via -f/--file; that is the intended use.
-	data, err := os.ReadFile(path)
+	return readDomainsFromFileWithSeen(path, addErr, map[string]struct{}{})
+}
+
+// readDomainsFromFileWithSeen handles `@include <path>` directives, glob
+// patterns and recursion detection. `seen` tracks absolute paths already
+// visited on the current include chain so a file cannot include itself.
+func readDomainsFromFileWithSeen(path string, addErr func(string), seen map[string]struct{}) []string {
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		addErr(fmt.Sprintf("read %s: %v", path, err))
+		addErr(fmt.Sprintf("resolve %s: %v", path, err))
 		return nil
 	}
+	if _, cycle := seen[abs]; cycle {
+		addErr(fmt.Sprintf("include cycle: %s already visited", abs))
+		return nil
+	}
+	seen[abs] = struct{}{}
+
+	//nolint:gosec // path comes from the user via -f/--file; that is the intended use.
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		addErr(fmt.Sprintf("read %s: %v", abs, err))
+		return nil
+	}
+
+	baseDir := filepath.Dir(abs)
 	var out []string
 	for _, raw := range strings.Split(string(data), "\n") {
 		line := raw
@@ -289,11 +315,58 @@ func readDomainsFromFile(path string, addErr func(string)) []string {
 		if line == "" {
 			continue
 		}
+
+		if rest, ok := strings.CutPrefix(line, "@include "); ok {
+			out = append(out, expandInclude(strings.TrimSpace(rest), baseDir, addErr, seen)...)
+			continue
+		}
+
 		if !isValidDomain(line) {
-			addErr(fmt.Sprintf("invalid domain in %s: %s", path, line))
+			addErr(fmt.Sprintf("invalid domain in %s: %s", abs, line))
 			continue
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+// expandInclude resolves a single @include argument. Supports ~ prefix and
+// glob patterns (via filepath.Glob). Relative paths resolve against baseDir.
+func expandInclude(spec, baseDir string, addErr func(string), seen map[string]struct{}) []string {
+	if strings.HasPrefix(spec, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			spec = filepath.Join(home, spec[2:])
+		}
+	} else if !filepath.IsAbs(spec) {
+		spec = filepath.Join(baseDir, spec)
+	}
+
+	matches, err := filepath.Glob(spec)
+	if err != nil {
+		addErr(fmt.Sprintf("invalid include pattern %q: %v", spec, err))
+		return nil
+	}
+	if len(matches) == 0 {
+		addErr(fmt.Sprintf("include %q matched no files", spec))
+		return nil
+	}
+	// Deterministic order so runs are stable across invocations.
+	sort.Strings(matches)
+
+	var out []string
+	for _, m := range matches {
+		//nolint:gosec // paths come from an explicit user glob; that is the intended use.
+		info, statErr := os.Stat(m)
+		if statErr != nil {
+			addErr(fmt.Sprintf("stat %s: %v", m, statErr))
+			continue
+		}
+		if info.IsDir() {
+			// Skip directories silently — a glob like ~/.domains/* commonly
+			// matches directories the user didn't mean to include.
+			continue
+		}
+		out = append(out, readDomainsFromFileWithSeen(m, addErr, seen)...)
 	}
 	return out
 }

@@ -11,7 +11,7 @@ _checkssl() {
         '(-d --domain)'{-d,--domain}'[domain to check (repeatable)]:domain:' \
         '(-f --file)'{-f,--file}'[file with one domain per line]:file:_files' \
         '(-s --silent)'{-s,--silent}'[suppress error output]' \
-        '--format[output format]:format:(table csv json nagios)' \
+        '--format[output format]:format:(table csv json nagios html)' \
         '--concurrency[max parallel TLS handshakes]:n:' \
         '--timeout[per-domain handshake timeout]:duration:' \
         '--nagios-warning[warn threshold in days (nagios only)]:n:' \

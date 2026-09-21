@@ -6,7 +6,7 @@
 complete -c checkssl -s d -l domain      -x -d 'Domain to check (repeatable)'
 complete -c checkssl -s f -l file        -r -F -d 'File with one domain per line'
 complete -c checkssl -s s -l silent            -d 'Suppress error output'
-complete -c checkssl      -l format      -x -a 'table csv json nagios' -d 'Output format'
+complete -c checkssl      -l format      -x -a 'table csv json nagios html' -d 'Output format'
 complete -c checkssl      -l concurrency -x    -d 'Max parallel TLS handshakes'
 complete -c checkssl      -l timeout     -x    -d 'Per-domain handshake timeout'
 complete -c checkssl      -l nagios-warning  -x -d 'Warn threshold in days (nagios only)'
