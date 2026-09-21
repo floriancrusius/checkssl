@@ -148,11 +148,25 @@ const htmlTemplate = `<!DOCTYPE html>
   .meta { color: var(--muted); margin: 0 0 1.5rem; font-size: .9rem; }
   .summary { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 1.5rem; }
   .chip { padding: .3rem .7rem; border-radius: 999px; font-size: .85rem;
-    font-weight: 600; border: 1px solid var(--border); }
+    font-weight: 600; border: 1px solid var(--border); cursor: pointer;
+    user-select: none; transition: opacity .1s ease; background: transparent; }
   .chip.valid    { color: var(--valid); }
   .chip.warn     { color: var(--warn);  }
   .chip.crit     { color: var(--crit);  }
   .chip.err      { color: var(--err);   }
+  .chip.off      { opacity: .35; text-decoration: line-through; }
+  .toolbar { display: flex; gap: .5rem; align-items: center; margin: 0 0 1rem;
+    flex-wrap: wrap; }
+  .toolbar input[type=search] {
+    flex: 1 1 240px; min-width: 180px; padding: .4rem .7rem;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+  .toolbar button {
+    padding: .4rem .7rem; background: transparent; color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px; font: inherit;
+    cursor: pointer; }
+  .toolbar .count { color: var(--muted); font-size: .85rem;
+    margin-left: auto; white-space: nowrap; }
   table { width: 100%; border-collapse: collapse; background: var(--bg);
     border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   th, td { padding: .55rem .8rem; text-align: left; border-bottom: 1px solid var(--border);
@@ -186,11 +200,16 @@ const htmlTemplate = `<!DOCTYPE html>
   <h1>{{.Title}}</h1>
   <p class="meta">Generated {{.GeneratedAt}} · {{.Total}} domain(s)</p>
   <div class="summary">
-    <span class="chip valid">{{.Valid}} valid</span>
-    <span class="chip warn">{{.ExpiringSoon}} expiring soon</span>
-    <span class="chip crit">{{.Expired}} expired</span>
-    <span class="chip crit">{{.Invalid}} invalid</span>
-    <span class="chip err">{{.Errored}} error</span>
+    <button type="button" class="chip valid" data-status="valid"                title="Click to toggle">{{.Valid}} valid</button>
+    <button type="button" class="chip warn"  data-status="expiring_soon"        title="Click to toggle">{{.ExpiringSoon}} expiring soon</button>
+    <button type="button" class="chip crit"  data-status="expired"              title="Click to toggle">{{.Expired}} expired</button>
+    <button type="button" class="chip crit"  data-status="invalid"              title="Click to toggle">{{.Invalid}} invalid</button>
+    <button type="button" class="chip err"   data-status="error"                title="Click to toggle">{{.Errored}} error</button>
+  </div>
+  <div class="toolbar">
+    <input type="search" id="filter" placeholder="Filter domains, issuer, notes…" autocomplete="off">
+    <button type="button" id="reset">Reset</button>
+    <span class="count" id="count"></span>
   </div>
   <table id="report">
     <thead>
@@ -218,12 +237,19 @@ const htmlTemplate = `<!DOCTYPE html>
   </table>
 </main>
 <script>
-  // Minimal click-to-sort. Numeric columns use the raw number, date columns
-  // parse dd.mm.yyyy, text uses locale compare.
   (function () {
-    const table = document.getElementById('report');
-    const tbody = table.tBodies[0];
+    const table   = document.getElementById('report');
+    const tbody   = table.tBodies[0];
     const headers = table.querySelectorAll('th');
+    const chips   = document.querySelectorAll('.chip[data-status]');
+    const search  = document.getElementById('filter');
+    const reset   = document.getElementById('reset');
+    const count   = document.getElementById('count');
+    const rows    = Array.from(tbody.rows);
+    const totalRows = rows.length;
+    const active  = new Set(Array.from(chips).map(c => c.dataset.status));
+
+    // --- sorting ---
     const parsers = {
       num:  v => v === '—' ? Number.POSITIVE_INFINITY : parseFloat(v),
       date: v => {
@@ -239,17 +265,53 @@ const htmlTemplate = `<!DOCTYPE html>
         const asc = !th.classList.contains('sort-asc');
         headers.forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
         th.classList.add(asc ? 'sort-asc' : 'sort-desc');
-        const rows = Array.from(tbody.rows);
-        rows.sort((a, b) => {
+        const sorted = Array.from(tbody.rows);
+        sorted.sort((a, b) => {
           const av = parsers[type](a.cells[idx].textContent.trim());
           const bv = parsers[type](b.cells[idx].textContent.trim());
           if (av < bv) return asc ? -1 : 1;
           if (av > bv) return asc ? 1 : -1;
           return 0;
         });
-        rows.forEach(r => tbody.appendChild(r));
+        sorted.forEach(r => tbody.appendChild(r));
       });
     });
+
+    // --- filtering ---
+    const rowSearchText = row => Array.from(row.cells).map(c => c.textContent.toLowerCase()).join(' ');
+    const rowStatus     = row => row.className.trim();
+
+    const applyFilter = () => {
+      const needle = search.value.trim().toLowerCase();
+      let shown = 0;
+      for (const row of rows) {
+        const statusOK = active.has(rowStatus(row));
+        const textOK   = !needle || rowSearchText(row).includes(needle);
+        const visible  = statusOK && textOK;
+        row.hidden = !visible;
+        if (visible) shown++;
+      }
+      count.textContent = shown === totalRows
+        ? shown + ' / ' + totalRows + ' shown'
+        : shown + ' / ' + totalRows + ' shown (filtered)';
+    };
+
+    chips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        const s = chip.dataset.status;
+        if (active.has(s)) { active.delete(s); chip.classList.add('off'); }
+        else               { active.add(s);    chip.classList.remove('off'); }
+        applyFilter();
+      });
+    });
+    search.addEventListener('input', applyFilter);
+    reset.addEventListener('click', () => {
+      search.value = '';
+      chips.forEach(c => { active.add(c.dataset.status); c.classList.remove('off'); });
+      applyFilter();
+    });
+
+    applyFilter();
   })();
 </script>
 </body>

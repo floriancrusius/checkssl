@@ -34,15 +34,46 @@ func TestHTML_ContainsExpectedSections(t *testing.T) {
 		"gone.example",
 		"broken.example",
 		"12.02.2025",
-		`class="chip valid">1 valid`,
-		`class="chip warn">1 expiring soon`,
-		`class="chip crit">1 expired`,
-		`class="chip err">1 error`,
+		`data-status="valid"`,
+		`data-status="expiring_soon"`,
+		`data-status="expired"`,
+		`data-status="invalid"`,
+		`data-status="error"`,
+		">1 valid</button>",
+		">1 expiring soon</button>",
+		">1 expired</button>",
+		">1 error</button>",
 		"timeout",
 	}
 	for _, s := range must {
 		if !strings.Contains(out, s) {
 			t.Errorf("output missing %q", s)
+		}
+	}
+}
+
+func TestHTML_HasFilterControls(t *testing.T) {
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	results := []cert.Result{
+		{Domain: "example.com", ExpiresAt: now.Add(90 * 24 * time.Hour),
+			Status: cert.StatusValid},
+	}
+	var buf bytes.Buffer
+	if err := HTML(&buf, results, HTMLOptions{Now: now, GeneratedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	// Search input, reset button, count label and per-status toggle chips.
+	must := []string{
+		`<input type="search" id="filter"`,
+		`id="reset"`,
+		`id="count"`,
+		`applyFilter`,
+	}
+	for _, s := range must {
+		if !strings.Contains(out, s) {
+			t.Errorf("filter UI missing %q\n%s", s, out)
 		}
 	}
 }

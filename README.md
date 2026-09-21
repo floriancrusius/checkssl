@@ -159,9 +159,12 @@ www.example.com,03.01.2026,102
 
 ### `html`
 
-Standalone HTML report with inline CSS, dark-mode support, and a
-click-to-sort table. Suitable for emailing, dropping into a static file
-server, or printing. No external assets — one `.html` file, no CDN.
+Standalone HTML report with inline CSS, dark-mode support, click-to-sort
+columns, per-status toggle chips (click "5 expired" to hide/show that
+bucket) and a live search box that filters rows against every visible
+cell — domain, issuer, error note, everything. Suitable for emailing,
+dropping into a static file server, or printing. No external assets —
+one `.html` file, no CDN.
 
 ```
 checkssl -f ~/.checkssl --format html > report.html
