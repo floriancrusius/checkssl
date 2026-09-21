@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,15 @@ import (
 	"github.com/floriancrusius/checkssl/internal/cert"
 	"github.com/floriancrusius/checkssl/internal/render"
 )
+
+//go:embed completions/checkssl.bash
+var completionBash string
+
+//go:embed completions/_checkssl
+var completionZsh string
+
+//go:embed completions/checkssl.fish
+var completionFish string
 
 // Version is overridden at build time via -ldflags "-X main.Version=...".
 var Version = "dev"
@@ -48,14 +58,16 @@ func (s *stringSlice) Set(v string) error {
 }
 
 type cliOptions struct {
-	domains     stringSlice
-	files       stringSlice
-	silent      bool
-	format      string
-	help        bool
-	version     bool
-	concurrency int
-	timeout     time.Duration
+	domains        stringSlice
+	files          stringSlice
+	silent         bool
+	format         string
+	help           bool
+	version        bool
+	concurrency    int
+	timeout        time.Duration
+	nagiosWarnDays int
+	nagiosCritDays int
 }
 
 func main() {
@@ -63,6 +75,12 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// Sub-commands come before flag parsing so `checkssl completion fish`
+	// works without competing with `-f`/`--file`.
+	if len(args) > 0 && args[0] == "completion" {
+		return runCompletion(args[1:], stdout, stderr)
+	}
+
 	opts, parseErr := parseFlags(args, stderr)
 	if parseErr != nil {
 		fmt.Fprintln(stderr, "error:", parseErr)
@@ -79,8 +97,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitCodeSuccess
 	}
 
-	if opts.format != "table" && opts.format != "csv" && opts.format != "json" {
-		fmt.Fprintf(stderr, "error: invalid format %q — expected table, csv, or json\n", opts.format)
+	switch opts.format {
+	case "table", "csv", "json", "nagios":
+	default:
+		fmt.Fprintf(stderr, "error: invalid format %q — expected table, csv, json, or nagios\n", opts.format)
 		return exitCodeUsageError
 	}
 
@@ -127,6 +147,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "error rendering JSON:", err)
 			return exitCodeError
 		}
+	case "nagios":
+		status, err := render.Nagios(stdout, sorted, render.NagiosOptions{
+			WarningDays:  opts.nagiosWarnDays,
+			CriticalDays: opts.nagiosCritDays,
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, "error rendering nagios:", err)
+			return exitCodeError
+		}
+		// Nagios plugins own the exit code: 0/1/2/3 = OK/WARN/CRIT/UNKNOWN.
+		return int(status)
 	default:
 		if err := render.Table(stdout, sorted, render.TableOptions{ColorEnabled: colorEnabled}); err != nil {
 			fmt.Fprintln(stderr, "error rendering table:", err)
@@ -173,6 +204,8 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.BoolVar(&opts.version, "version", false, "show version")
 	fs.IntVar(&opts.concurrency, "concurrency", defaultConcurrency, "max parallel TLS handshakes")
 	fs.DurationVar(&opts.timeout, "timeout", defaultTimeoutSecs*time.Second, "per-domain TLS handshake timeout")
+	fs.IntVar(&opts.nagiosWarnDays, "nagios-warning", 30, "warn threshold in days for --format nagios")
+	fs.IntVar(&opts.nagiosCritDays, "nagios-critical", 14, "critical threshold in days for --format nagios")
 
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -190,9 +223,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -d, --domain <domain>   check a specific domain (repeatable)")
 	fmt.Fprintln(w, "  -f, --file <file>       read one domain per line from a file (repeatable)")
 	fmt.Fprintln(w, "  -s, --silent            suppress error output")
-	fmt.Fprintln(w, "      --format <type>     output format: table (default), csv, json")
+	fmt.Fprintln(w, "      --format <type>     output format: table (default), csv, json, nagios")
 	fmt.Fprintln(w, "      --concurrency <n>   max parallel TLS handshakes (default 100)")
 	fmt.Fprintln(w, "      --timeout <dur>     per-domain handshake timeout (default 5s)")
+	fmt.Fprintln(w, "      --nagios-warning <n>   days threshold (default 30, --format nagios only)")
+	fmt.Fprintln(w, "      --nagios-critical <n>  days threshold (default 14, --format nagios only)")
 	fmt.Fprintln(w, "  -h, --help              show this help")
 	fmt.Fprintln(w, "  -v, --version           show version")
 	fmt.Fprintln(w)
@@ -305,6 +340,27 @@ func checkAll(ctx context.Context, domains []string, opts cliOptions, addErr fun
 	}
 	wg.Wait()
 	return results
+}
+
+func runCompletion(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "usage: checkssl completion <bash|zsh|fish>")
+		return exitCodeUsageError
+	}
+	var script string
+	switch args[0] {
+	case "bash":
+		script = completionBash
+	case "zsh":
+		script = completionZsh
+	case "fish":
+		script = completionFish
+	default:
+		fmt.Fprintf(stderr, "unknown shell %q — supported: bash, zsh, fish\n", args[0])
+		return exitCodeUsageError
+	}
+	fmt.Fprint(stdout, script)
+	return exitCodeSuccess
 }
 
 func shouldColor(w io.Writer) bool {

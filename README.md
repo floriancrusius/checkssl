@@ -39,10 +39,26 @@ unhappy instead of just "handshake failed".
 git clone git@github.com:floriancrusius/checkssl.git
 cd checkssl
 make install                # → /usr/local/bin/checkssl
+make install-completions    # → bash / zsh / fish completions
+make install-manpage        # → /usr/local/share/man/man1/checkssl.1
 ```
 
 `make install` uses `INSTALL_PREFIX=/usr/local`; override with
-`make install INSTALL_PREFIX=$HOME/.local`.
+`make install INSTALL_PREFIX=$HOME/.local`. `make uninstall` removes
+everything the install targets placed.
+
+### Shell completion without installing
+
+```
+# fish
+checkssl completion fish | source
+
+# bash
+eval "$(checkssl completion bash)"
+
+# zsh (needs a compinit-managed session)
+checkssl completion zsh > ~/.zsh/completions/_checkssl
+```
 
 ### Cross-compile all platforms
 
@@ -62,16 +78,23 @@ checkssl -f domains.txt --concurrency 200
 
 ### Options
 
-| Flag                     | Description                                    |
-|--------------------------|------------------------------------------------|
-| `-d, --domain <domain>`  | check one domain (repeatable)                  |
-| `-f, --file <file>`      | read one domain per line from a file           |
-| `-s, --silent`           | suppress the error summary                     |
-| `    --format <type>`    | `table` (default), `csv`, `json`               |
-| `    --concurrency <n>`  | max parallel TLS handshakes (default `100`)    |
-| `    --timeout <dur>`    | per-domain handshake timeout (default `5s`)    |
-| `-h, --help`             | show help                                      |
-| `-v, --version`          | show version                                   |
+| Flag                          | Description                                         |
+|-------------------------------|-----------------------------------------------------|
+| `-d, --domain <domain>`       | check one domain (repeatable)                       |
+| `-f, --file <file>`           | read one domain per line from a file                |
+| `-s, --silent`                | suppress the error summary                          |
+| `    --format <type>`         | `table` (default), `csv`, `json`, `nagios`          |
+| `    --concurrency <n>`       | max parallel TLS handshakes (default `100`)         |
+| `    --timeout <dur>`         | per-domain handshake timeout (default `5s`)         |
+| `    --nagios-warning <n>`    | warn threshold in days (default `30`, nagios only)  |
+| `    --nagios-critical <n>`   | critical threshold in days (default `14`, nagios only) |
+| `-h, --help`                  | show help                                           |
+| `-v, --version`               | show version                                        |
+
+### Sub-commands
+
+- `checkssl completion {bash|zsh|fish}` — print a completion script suitable
+  for `eval` or `source`.
 
 ### Config file
 
@@ -106,6 +129,17 @@ Script-friendly, header row included.
 Domain,Expiration,DaysUntilExpiry
 api.example.com,27.11.2026,67
 www.example.com,03.01.2026,102
+```
+
+### `nagios`
+
+Single-line Nagios-compatible plugin output; exit code is `0 / 1 / 2 / 3`
+= `OK / WARNING / CRITICAL / UNKNOWN`.
+
+```
+$ checkssl -f domains.txt --format nagios ; echo "exit=$?"
+WARNING - 3 expiring within 30d (next: api.example.com in 12 days) | total=42 valid=39 warning=3 critical=0 expired=0 invalid=0 error=0 min_days=12;30;14
+exit=1
 ```
 
 ### `json`

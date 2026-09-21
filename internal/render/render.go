@@ -174,6 +174,147 @@ func JSON(w io.Writer, results []cert.Result, now time.Time) error {
 	return err
 }
 
+// NagiosStatus is the plugin exit-code contract Nagios / Icinga / CheckMK /
+// Sensu all speak: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
+type NagiosStatus int
+
+const (
+	NagiosOK       NagiosStatus = 0
+	NagiosWarning  NagiosStatus = 1
+	NagiosCritical NagiosStatus = 2
+	NagiosUnknown  NagiosStatus = 3
+)
+
+// NagiosOptions tunes the thresholds used by Nagios(); zero values fall back
+// to sensible defaults (14d critical, 30d warning).
+type NagiosOptions struct {
+	Now          time.Time
+	WarningDays  int
+	CriticalDays int
+}
+
+// Nagios renders a single-line Nagios-compatible plugin output and returns
+// the status code the caller should exit with:
+//
+//	STATE - human message | perfdata_key=value;warn;crit ...
+//
+// State is derived from the worst result in `results`: any error/expired ⇒
+// CRITICAL, any invalid ⇒ CRITICAL, any expiry within critical window ⇒
+// CRITICAL, any within warning window ⇒ WARNING, else OK.
+func Nagios(w io.Writer, results []cert.Result, opts NagiosOptions) (NagiosStatus, error) {
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	warnDays := opts.WarningDays
+	if warnDays <= 0 {
+		warnDays = 30
+	}
+	critDays := opts.CriticalDays
+	if critDays <= 0 {
+		critDays = 14
+	}
+
+	if len(results) == 0 {
+		_, err := fmt.Fprintln(w, "UNKNOWN - no domains checked")
+		return NagiosUnknown, err
+	}
+
+	// Aggregate.
+	var (
+		state           = NagiosOK
+		nErr, nExp      int
+		nInvalid        int
+		nCrit, nWarn    int
+		nOK             int
+		minDaysSet      bool
+		minDays         int
+		worstDomain     string
+		worstDomainDays int
+	)
+	for _, r := range results {
+		switch r.Status {
+		case cert.StatusError:
+			nErr++
+			bumpWorst(&state, NagiosCritical)
+		case cert.StatusExpired:
+			nExp++
+			bumpWorst(&state, NagiosCritical)
+		case cert.StatusInvalid:
+			nInvalid++
+			bumpWorst(&state, NagiosCritical)
+		default:
+			// valid / expiring_soon — decide by days remaining vs. thresholds.
+			d := daysBetween(r.ExpiresAt, now)
+			switch {
+			case d <= critDays:
+				nCrit++
+				bumpWorst(&state, NagiosCritical)
+			case d <= warnDays:
+				nWarn++
+				bumpWorst(&state, NagiosWarning)
+			default:
+				nOK++
+			}
+			if !minDaysSet || d < minDays {
+				minDays = d
+				minDaysSet = true
+				worstDomain = r.Domain
+				worstDomainDays = d
+			}
+		}
+	}
+
+	// Human message.
+	var msg string
+	switch state {
+	case NagiosOK:
+		msg = fmt.Sprintf("OK - %d cert(s) valid, next expiry %s in %d days",
+			len(results), worstDomain, worstDomainDays)
+	case NagiosWarning:
+		msg = fmt.Sprintf("WARNING - %d expiring within %dd (next: %s in %d days)",
+			nWarn+nCrit, warnDays, worstDomain, worstDomainDays)
+	case NagiosCritical:
+		parts := []string{}
+		if nErr > 0 {
+			parts = append(parts, fmt.Sprintf("%d error", nErr))
+		}
+		if nExp > 0 {
+			parts = append(parts, fmt.Sprintf("%d expired", nExp))
+		}
+		if nInvalid > 0 {
+			parts = append(parts, fmt.Sprintf("%d invalid", nInvalid))
+		}
+		if nCrit > 0 {
+			parts = append(parts, fmt.Sprintf("%d expiring within %dd", nCrit, critDays))
+		}
+		msg = fmt.Sprintf("CRITICAL - %s", strings.Join(parts, ", "))
+		if worstDomain != "" {
+			msg += fmt.Sprintf(" (next: %s in %d days)", worstDomain, worstDomainDays)
+		}
+	default:
+		msg = "UNKNOWN"
+	}
+
+	// Perfdata.
+	perf := fmt.Sprintf(
+		"total=%d valid=%d warning=%d critical=%d expired=%d invalid=%d error=%d",
+		len(results), nOK, nWarn, nCrit, nExp, nInvalid, nErr,
+	)
+	if minDaysSet {
+		perf += fmt.Sprintf(" min_days=%d;%d;%d", minDays, warnDays, critDays)
+	}
+
+	_, err := fmt.Fprintf(w, "%s | %s\n", msg, perf)
+	return state, err
+}
+
+func bumpWorst(current *NagiosStatus, candidate NagiosStatus) {
+	if candidate > *current {
+		*current = candidate
+	}
+}
+
 // PrintErrors writes an error summary to w. No-op for an empty slice.
 func PrintErrors(w io.Writer, errs []string) {
 	if len(errs) == 0 {

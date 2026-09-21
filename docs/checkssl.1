@@ -1,0 +1,204 @@
+.TH CHECKSSL 1 "September 2026" "checkssl" "User Commands"
+.SH NAME
+checkssl \- inspect TLS certificates for one or more domains
+.SH SYNOPSIS
+.B checkssl
+.RI [ options ]
+.br
+.B checkssl completion
+.RI { bash | zsh | fish }
+.SH DESCRIPTION
+.B checkssl
+opens a TLS connection to each listed domain, retrieves the peer
+certificate, and reports its expiry date and health. Expired,
+self-signed, and hostname-mismatched certificates are reported as
+data \(em not as connection errors \(em so the tool can distinguish
+between "cert is bad" and "server is down".
+.PP
+Handshakes run concurrently (default 100 in parallel). The exit code
+reflects certificate health, making
+.B checkssl
+suitable as a cron probe or Nagios/Icinga plugin.
+.SH OPTIONS
+.TP
+.BR \-d ", " \-\-domain " " \fIDOMAIN\fR
+Check a specific domain. May be given multiple times.
+.TP
+.BR \-f ", " \-\-file " " \fIFILE\fR
+Read one domain per line from
+.IR FILE .
+Lines beginning with
+.RB \(oq # \(cq
+and blank lines are ignored;
+.RB \(oq # \(cq
+also starts an end-of-line comment. May be given multiple times.
+.TP
+.BR \-s ", " \-\-silent
+Suppress the error summary written to stderr.
+.TP
+.BR \-\-format " " \fIFORMAT\fR
+Output format. One of
+.BR table " (default), " csv ", " json ", " nagios .
+See
+.B OUTPUT FORMATS
+below.
+.TP
+.BR \-\-concurrency " " \fIN\fR
+Maximum parallel TLS handshakes. Default 100.
+.TP
+.BR \-\-timeout " " \fIDURATION\fR
+Per-domain handshake timeout, in Go duration syntax
+.RI ( e.g.\ 5s ,
+.IR 500ms ).
+Default 5s.
+.TP
+.BR \-\-nagios\-warning " " \fIDAYS\fR
+Warn threshold in days for
+.BR "\-\-format nagios" .
+Default 30.
+.TP
+.BR \-\-nagios\-critical " " \fIDAYS\fR
+Critical threshold in days for
+.BR "\-\-format nagios" .
+Default 14.
+.TP
+.BR \-h ", " \-\-help
+Print help.
+.TP
+.BR \-v ", " \-\-version
+Print version.
+.SH "DEFAULT DOMAIN LIST"
+When neither
+.B \-d
+nor
+.B \-f
+is given,
+.B checkssl
+reads
+.I ~/.checkssl
+if it exists (one domain per line,
+.RB \(oq # \(cq
+starts a comment). If that file is absent, a single default domain is
+checked.
+.SH "OUTPUT FORMATS"
+.SS table
+Human-readable, three-column table with a coloured
+.B "expires in"
+column. Colour is emitted only when stdout is a terminal;
+.B NO_COLOR=1
+disables it. Legend: green > 30 days, yellow \(<= 30 days, red for
+expired or invalid, dim for errors.
+.SS csv
+Header row
+.RB \(oq Domain,Expiration,DaysUntilExpiry \(cq
+followed by one row per domain.
+.SS json
+Pretty-printed array of objects with
+.BR domain ", " expiration ", " daysUntilExpiry ", " status
+and optional
+.BR authorizationError " / " error
+fields.
+.SS nagios
+Single-line plugin output:
+.PP
+.RS
+.EX
+STATE \- <message> | key=value key=value ...
+.EE
+.RE
+.PP
+The exit code follows the Nagios convention: 0 OK, 1 WARNING,
+2 CRITICAL, 3 UNKNOWN. Overrides the default exit-code mapping
+described below.
+.SH "EXIT STATUS"
+For every format except
+.BR nagios :
+.TP
+.B 0
+Every domain came back
+.B valid
+or
+.BR expiring_soon .
+.TP
+.B 1
+At least one domain came back
+.BR expired ", " invalid ", or " error .
+.TP
+.B 2
+The command was invoked incorrectly (bad flag, unknown format).
+.PP
+For
+.BR "\-\-format nagios" ,
+the exit code is 0 / 1 / 2 / 3 as described above.
+.SH "STATUS BUCKETS"
+.TP
+.B valid
+Trusted certificate, more than 30 days remaining.
+.TP
+.B expiring_soon
+Trusted certificate that expires within 30 days.
+.TP
+.B expired
+NotAfter is in the past.
+.TP
+.B invalid
+Certificate served but rejected: self-signed, wrong DNS name,
+unknown CA, and so on. The
+.B authorizationError
+field carries the reason.
+.TP
+.B error
+No certificate obtained: connection refused, timeout, DNS failure.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set to any non-empty value, disables ANSI colours in the
+.B table
+output.
+.SH FILES
+.TP
+.I ~/.checkssl
+Default domain list, one domain per line;
+.RB \(oq # \(cq
+starts a comment.
+.SH EXAMPLES
+.PP
+Check a single domain:
+.PP
+.RS
+.EX
+$ checkssl -d example.com
+.EE
+.RE
+.PP
+Check many domains from a file, JSON output:
+.PP
+.RS
+.EX
+$ checkssl -f domains.txt --format json > report.json
+.EE
+.RE
+.PP
+Use as a Nagios plugin with a 60-day warn / 21-day critical policy:
+.PP
+.RS
+.EX
+$ checkssl -f domains.txt \\
+    --format nagios --nagios-warning 60 --nagios-critical 21
+.EE
+.RE
+.PP
+Install shell completion (fish):
+.PP
+.RS
+.EX
+$ checkssl completion fish | source
+.EE
+.RE
+.SH "SEE ALSO"
+.BR openssl (1),
+.BR s_client (1)
+.SH AUTHOR
+Florian Crusius
+.SH "REPORTING BUGS"
+https://github.com/floriancrusius/checkssl/issues
