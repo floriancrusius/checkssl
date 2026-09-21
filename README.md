@@ -1,29 +1,56 @@
 # checkssl
 
-A small CLI that inspects the TLS certificate of one or more domains and
-tells you when they expire.
+> A single-binary TLS certificate checker for humans and cron jobs.
 
-Written in Go; ships as a single static ~6 MB binary with no runtime
-dependencies.
+```
+$ checkssl -d google.com -d expired.badssl.com -d self-signed.badssl.com
+===========================================================
+| expired.badssl.com     | 13.04.2015 | expired 4176d ago |   ← red
+| google.com             | 27.11.2026 |        in 67 days |   ← green
+| self-signed.badssl.com | 14.09.2028 |       in 728 days |   ← red (invalid)
+===========================================================
+
+❌ Errors encountered:
+
+   self-signed.badssl.com: x509: certificate signed by unknown authority
+```
+
+The exit code is `1` — so cron notices, Grafana notices, you notice.
+
+---
+
+## Why?
+
+`openssl s_client -connect host:443 </dev/null | openssl x509 -noout -dates`
+tells you what you need to know, once, if you enjoy shell pipelines. `checkssl`
+is what you want when you have a dozen domains, want CSV or JSON out, want the
+exit code to mean something, and want a coloured "expires in N days" column
+that jumps out when a cert is about to lapse.
+
+It reports **expired**, **self-signed**, and **hostname-mismatch** certs as
+data — not as connection errors — so `checkssl` can tell you _why_ a cert is
+unhappy instead of just "handshake failed".
 
 ## Install
 
-### From source
+### macOS / Linux, from source
 
 ```
 git clone git@github.com:floriancrusius/checkssl.git
 cd checkssl
-make install                    # → /usr/local/bin/checkssl
+make install                # → /usr/local/bin/checkssl
 ```
 
-`make install` uses `INSTALL_PREFIX=/usr/local` by default. Override with
+`make install` uses `INSTALL_PREFIX=/usr/local`; override with
 `make install INSTALL_PREFIX=$HOME/.local`.
 
-### Cross-compile
+### Cross-compile all platforms
 
 ```
-make build-all                  # → dist/checkssl-{darwin,linux,windows}-{amd64,arm64}
+make build-all              # → dist/checkssl-{darwin,linux,windows}-{amd64,arm64}
 ```
+
+Static, CGO-free, ~5.9 MB per binary.
 
 ## Usage
 
@@ -35,20 +62,20 @@ checkssl -f domains.txt --concurrency 200
 
 ### Options
 
-```
--d, --domain <domain>   check a specific domain (repeatable)
--f, --file <file>       read one domain per line from a file (repeatable)
--s, --silent            suppress error output
-    --format <type>     output format: table (default), csv, json
-    --concurrency <n>   max parallel TLS handshakes (default 100)
-    --timeout <dur>     per-domain handshake timeout (default 5s)
--h, --help              show help
--v, --version           show version
-```
+| Flag                     | Description                                    |
+|--------------------------|------------------------------------------------|
+| `-d, --domain <domain>`  | check one domain (repeatable)                  |
+| `-f, --file <file>`      | read one domain per line from a file           |
+| `-s, --silent`           | suppress the error summary                     |
+| `    --format <type>`    | `table` (default), `csv`, `json`               |
+| `    --concurrency <n>`  | max parallel TLS handshakes (default `100`)    |
+| `    --timeout <dur>`    | per-domain handshake timeout (default `5s`)    |
+| `-h, --help`             | show help                                      |
+| `-v, --version`          | show version                                   |
 
 ### Config file
 
-If you don't pass `-d` or `-f`, `checkssl` reads `~/.checkssl` — one
+When you pass neither `-d` nor `-f`, `checkssl` reads `~/.checkssl` — one
 domain per line, `#` starts a comment.
 
 ```
@@ -57,71 +84,102 @@ api.example.com
 www.example.com
 
 # staging
-staging.example.com
+staging.example.com     # rotated 2026-08
 ```
 
-### Output
+## Output formats
 
-**table** (default, colored when stdout is a TTY, `NO_COLOR` respected):
+### `table` (default)
 
-```
-===========================================================
-| expired.badssl.com     | 13.04.2015 | expired 4176d ago |
-| google.com             | 27.11.2026 |        in 70 days |
-| self-signed.badssl.com | 14.09.2028 |       in 728 days |
-===========================================================
-```
+Coloured when stdout is a TTY. `NO_COLOR=1` disables colours everywhere.
 
-**csv** (script-friendly, header row):
+- **green** — valid, more than 30 days left
+- **yellow** — valid, but expires within 30 days
+- **red** — expired _or_ invalid (self-signed, wrong hostname, unknown CA…)
+- **dim** — no cert obtained (timeout, connection refused)
 
-```
+### `csv`
+
+Script-friendly, header row included.
+
+```csv
 Domain,Expiration,DaysUntilExpiry
-example.com,27.11.2026,70
+api.example.com,27.11.2026,67
+www.example.com,03.01.2026,102
 ```
 
-**json**:
+### `json`
 
 ```json
 [
   {
-    "domain": "example.com",
+    "domain": "api.example.com",
     "expiration": "27.11.2026",
-    "daysUntilExpiry": 70,
+    "daysUntilExpiry": 67,
     "status": "valid"
+  },
+  {
+    "domain": "self-signed.badssl.com",
+    "expiration": "14.09.2028",
+    "daysUntilExpiry": 728,
+    "status": "invalid",
+    "authorizationError": "x509: certificate signed by unknown authority"
   }
 ]
 ```
 
-### Status buckets
+## Status buckets
 
-- `valid` — authorized and expires in more than 30 days
-- `expiring_soon` — authorized and expires within 30 days
-- `expired` — expiry date is in the past
-- `invalid` — cert obtained but rejected (self-signed, hostname
-  mismatch, unknown CA…); `authorizationError` explains why
-- `error` — no cert could be fetched (connection refused, timeout…)
+| Status           | Meaning                                                             |
+|------------------|---------------------------------------------------------------------|
+| `valid`          | trusted, more than 30 days remaining                                |
+| `expiring_soon`  | trusted, expires within 30 days                                     |
+| `expired`        | NotAfter is in the past                                             |
+| `invalid`        | cert served but rejected (self-signed, wrong DNS name, unknown CA…) |
+| `error`          | no cert obtained (connection refused, timeout, DNS…)                |
 
-### Exit code
+## Exit code
 
-`0` when every domain is `valid` or `expiring_soon`; `1` when at least
-one comes back `expired`, `invalid`, or `error`. Handy for cron and CI.
+- `0` — every domain came back `valid` or `expiring_soon`
+- `1` — at least one domain came back `expired`, `invalid`, or `error`
+- `2` — the CLI itself was invoked incorrectly (bad flag, unknown format)
+
+That makes `checkssl` a drop-in cron / CI probe:
+
+```cron
+# ~/.crontab — nightly at 06:00, alert via ntfy on any red
+0 6 * * *  checkssl -f ~/.checkssl -s || curl -H "Priority: high" \
+             -H "Title: SSL check failed" \
+             -d "$(checkssl -f ~/.checkssl --format json)" \
+             https://ntfy.example.com/ssl
+```
 
 ## Development
 
 ```
-make test                       # go test ./...
-make test-race
-make lint                       # go vet + gofmt check
-make fmt                        # gofmt -w .
+make test           # go test ./...
+make test-race      # with the race detector
+make lint           # golangci-lint v2
+make fmt            # gofmt -w .
+make build          # host binary → bin/checkssl
+make build-all      # all platforms → dist/
+make clean
 ```
 
-Layout:
+### Layout
 
 ```
-main.go                         # CLI entry point
-internal/cert/                  # TLS handshake + status classification
-internal/render/                # table/csv/json output
+main.go                    CLI parsing + orchestration
+internal/cert/             tls.Dial + independent x509 verification
+  cert.go
+  cert_test.go             unit tests via injected Dialer
+  integration_test.go      end-to-end via httptest with a local CA
+internal/render/           table / csv / json formatters
 ```
+
+The `internal/cert` package is import-safe from other Go programs — if you
+want a certificate-checking function inside a bigger service, `cert.Check`
+returns the same `Result` type `checkssl` uses.
 
 ## License
 
