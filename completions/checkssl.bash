@@ -1,7 +1,8 @@
 # bash completion for checkssl
 # shellcheck shell=bash
 #
-# Load with:   source /usr/local/etc/bash_completion.d/checkssl
+# Install to:  /usr/local/etc/bash_completion.d/checkssl                (macOS, Homebrew)
+#              /usr/local/share/bash-completion/completions/checkssl     (Linux)
 # Or in-shell: eval "$(checkssl completion bash)"
 
 _checkssl() {

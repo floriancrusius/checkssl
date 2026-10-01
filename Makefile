@@ -4,7 +4,14 @@ DIST_DIR := dist
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.Version=$(VERSION)
 INSTALL_PREFIX ?= /usr/local
+UNAME_S        := $(shell uname -s)
+# Homebrew's bash-completion reads etc/bash_completion.d; bash-completion
+# on Linux lazy-loads from share/bash-completion/completions instead.
+ifeq ($(UNAME_S),Darwin)
 BASH_COMP_DIR  ?= $(INSTALL_PREFIX)/etc/bash_completion.d
+else
+BASH_COMP_DIR  ?= $(INSTALL_PREFIX)/share/bash-completion/completions
+endif
 ZSH_COMP_DIR   ?= $(INSTALL_PREFIX)/share/zsh/site-functions
 FISH_COMP_DIR  ?= $(INSTALL_PREFIX)/share/fish/vendor_completions.d
 MAN_DIR        ?= $(INSTALL_PREFIX)/share/man/man1
