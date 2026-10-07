@@ -15,11 +15,13 @@ type HTMLOptions struct {
 	Now         time.Time
 	GeneratedAt time.Time
 	Title       string
+	ShowIP      bool
 }
 
 // htmlRow is what the template iterates over.
 type htmlRow struct {
 	Domain     string
+	IP         string
 	Status     string
 	StatusText string
 	Expiration string
@@ -37,6 +39,7 @@ type htmlPage struct {
 	Expired      int
 	Invalid      int
 	Errored      int
+	ShowIP       bool
 	Rows         []htmlRow
 }
 
@@ -61,10 +64,12 @@ func HTML(w io.Writer, results []cert.Result, opts HTMLOptions) error {
 		Title:       title,
 		GeneratedAt: generated.Format("2006-01-02 15:04:05 MST"),
 		Total:       len(results),
+		ShowIP:      opts.ShowIP,
 	}
 	for _, r := range results {
 		row := htmlRow{
 			Domain: r.Domain,
+			IP:     r.ResolvedIP,
 			Status: string(r.Status),
 			Issuer: r.Issuer,
 		}
@@ -215,6 +220,7 @@ const htmlTemplate = `<!DOCTYPE html>
     <thead>
       <tr>
         <th data-type="text">Domain</th>
+        {{if .ShowIP}}<th data-type="text">IP</th>{{end}}
         <th data-type="text" class="status">Status</th>
         <th data-type="date" class="expiration">Expiration</th>
         <th data-type="num"  class="days">Days</th>
@@ -223,9 +229,11 @@ const htmlTemplate = `<!DOCTYPE html>
       </tr>
     </thead>
     <tbody>
+    {{$showIP := .ShowIP}}
     {{range .Rows}}
       <tr class="{{.Status}}">
         <td>{{.Domain}}</td>
+        {{if $showIP}}<td>{{.IP}}</td>{{end}}
         <td class="status {{.Status}}">{{.StatusText}}</td>
         <td class="expiration">{{.Expiration}}</td>
         <td class="days">{{.Days}}</td>

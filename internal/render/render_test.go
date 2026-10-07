@@ -105,9 +105,90 @@ func TestTable_ColorSuppressedByDefault(t *testing.T) {
 	}
 }
 
+func TestTable_ShowIPAddsColumn(t *testing.T) {
+	results := []cert.Result{
+		{Domain: "a.example", ResolvedIP: "138.199.133.112",
+			ExpiresAt: time.Date(2025, 2, 12, 0, 0, 0, 0, time.UTC), Status: cert.StatusValid},
+		{Domain: "b.example", ResolvedIP: "2001:db8::1",
+			ExpiresAt: time.Date(2025, 2, 12, 0, 0, 0, 0, time.UTC), Status: cert.StatusValid},
+		{Domain: "broken.example", ResolvedIP: "", // no connection
+			Status: cert.StatusError},
+	}
+	var buf bytes.Buffer
+	if err := Table(&buf, results, TableOptions{Now: testNow, ShowIP: true}); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	for _, want := range []string{"138.199.133.112", "2001:db8::1", "—"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in output:\n%s", want, got)
+		}
+	}
+}
+
+func TestTable_ShowIPOffByDefault(t *testing.T) {
+	results := []cert.Result{
+		{Domain: "a.example", ResolvedIP: "198.51.100.42",
+			ExpiresAt: time.Date(2025, 2, 12, 0, 0, 0, 0, time.UTC), Status: cert.StatusValid},
+	}
+	var buf bytes.Buffer
+	if err := Table(&buf, results, TableOptions{Now: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "198.51.100.42") {
+		t.Errorf("IP should not appear without ShowIP:\n%s", buf.String())
+	}
+}
+
+func TestCSV_WithShowIP(t *testing.T) {
+	results := []cert.Result{
+		{Domain: "a.example", ResolvedIP: "1.2.3.4",
+			ExpiresAt: time.Date(2025, 2, 12, 0, 0, 0, 0, time.UTC), Status: cert.StatusValid},
+	}
+	var buf bytes.Buffer
+	if err := CSV(&buf, results, CSVOptions{Now: testNow, ShowIP: true}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\r\n"), "\n")
+	if lines[0] != "Domain,IP,Expiration,DaysUntilExpiry" {
+		t.Errorf("header = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "a.example,1.2.3.4,12.02.2025,42") {
+		t.Errorf("row = %q", lines[1])
+	}
+}
+
+func TestJSON_WithShowIP(t *testing.T) {
+	results := []cert.Result{
+		{Domain: "a.example", ResolvedIP: "1.2.3.4",
+			ExpiresAt: time.Date(2025, 2, 12, 0, 0, 0, 0, time.UTC), Status: cert.StatusValid},
+	}
+	var buf bytes.Buffer
+	if err := JSON(&buf, results, JSONOptions{Now: testNow, ShowIP: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"resolvedIP": "1.2.3.4"`) {
+		t.Errorf("expected resolvedIP field:\n%s", buf.String())
+	}
+}
+
+func TestJSON_WithoutShowIPOmitsField(t *testing.T) {
+	results := []cert.Result{
+		{Domain: "a.example", ResolvedIP: "1.2.3.4",
+			ExpiresAt: time.Date(2025, 2, 12, 0, 0, 0, 0, time.UTC), Status: cert.StatusValid},
+	}
+	var buf bytes.Buffer
+	if err := JSON(&buf, results, JSONOptions{Now: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "resolvedIP") {
+		t.Errorf("resolvedIP should be absent when ShowIP is false:\n%s", buf.String())
+	}
+}
+
 func TestCSV_HeaderAndRows(t *testing.T) {
 	var buf bytes.Buffer
-	if err := CSV(&buf, sample(), testNow); err != nil {
+	if err := CSV(&buf, sample(), CSVOptions{Now: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\r\n"), "\n")
@@ -125,7 +206,7 @@ func TestCSV_HeaderAndRows(t *testing.T) {
 func TestCSV_ErrorRow(t *testing.T) {
 	results := []cert.Result{{Domain: "broken.com", Status: cert.StatusError}}
 	var buf bytes.Buffer
-	if err := CSV(&buf, results, testNow); err != nil {
+	if err := CSV(&buf, results, CSVOptions{Now: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\r\n"), "\n")
@@ -136,7 +217,7 @@ func TestCSV_ErrorRow(t *testing.T) {
 
 func TestJSON_HappyPath(t *testing.T) {
 	var buf bytes.Buffer
-	if err := JSON(&buf, sample(), testNow); err != nil {
+	if err := JSON(&buf, sample(), JSONOptions{Now: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	var records []JSONRecord
@@ -160,7 +241,7 @@ func TestJSON_HappyPath(t *testing.T) {
 func TestJSON_ErrorFieldsAndNullDays(t *testing.T) {
 	results := []cert.Result{{Domain: "broken.com", Status: cert.StatusError, Err: "boom"}}
 	var buf bytes.Buffer
-	if err := JSON(&buf, results, testNow); err != nil {
+	if err := JSON(&buf, results, JSONOptions{Now: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	// Assert on the raw JSON so we can verify null vs. missing.

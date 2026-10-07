@@ -35,6 +35,7 @@ type Result struct {
 	Err        string // non-empty when no certificate could be obtained
 	Issuer     string
 	SubjectAlt []string
+	ResolvedIP string // the IP address the TLS handshake actually used
 }
 
 // Options configures a Check call. Zero values fall back to sensible defaults.
@@ -50,8 +51,10 @@ type Options struct {
 	RootCAs *x509.CertPool
 }
 
-// Dialer abstracts a TLS dialer so tests can inject a fake.
-type Dialer func(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, error)
+// Dialer abstracts a TLS dialer so tests can inject a fake. The second
+// return value is the IP the handshake actually ran against (empty when the
+// dialer cannot determine it, e.g. in tests).
+type Dialer func(ctx context.Context, host, port string, cfg *tls.Config) (state *tls.ConnectionState, ip string, err error)
 
 // Resolver abstracts host-to-IP resolution so tests can inject a fake.
 type Resolver func(ctx context.Context, host string) ([]net.IPAddr, error)
@@ -65,11 +68,11 @@ func defaultResolver(ctx context.Context, host string) ([]net.IPAddr, error) {
 // where IPv6 is disabled or unreachable but the server also publishes an
 // A record — the common case. If the host is a literal IP, no resolution
 // happens.
-func defaultDialer(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, error) {
+func defaultDialer(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, string, error) {
 	return dialPreferIPv4(ctx, host, port, cfg, defaultResolver)
 }
 
-func dialPreferIPv4(ctx context.Context, host, port string, cfg *tls.Config, resolve Resolver) (*tls.ConnectionState, error) {
+func dialPreferIPv4(ctx context.Context, host, port string, cfg *tls.Config, resolve Resolver) (*tls.ConnectionState, string, error) {
 	// IP literal → dial directly, no resolution.
 	if net.ParseIP(host) != nil {
 		return tlsDial(ctx, host, port, cfg)
@@ -77,21 +80,21 @@ func dialPreferIPv4(ctx context.Context, host, port string, cfg *tls.Config, res
 
 	ips, err := resolve(ctx, host)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("no addresses for %s", host)
+		return nil, "", fmt.Errorf("no addresses for %s", host)
 	}
 
 	var lastErr error
 	for _, ip := range preferIPv4(ips) {
-		state, err := tlsDial(ctx, ip.String(), port, cfg)
+		state, resolvedIP, err := tlsDial(ctx, ip.String(), port, cfg)
 		if err == nil {
-			return state, nil
+			return state, resolvedIP, nil
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	return nil, "", lastErr
 }
 
 // preferIPv4 returns a copy of `ips` with IPv4 addresses in front, preserving
@@ -112,19 +115,23 @@ func preferIPv4(ips []net.IPAddr) []net.IPAddr {
 	return out
 }
 
-func tlsDial(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, error) {
+func tlsDial(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, string, error) {
 	d := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { _ = conn.Close() }()
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		return nil, fmt.Errorf("dialer did not return a *tls.Conn")
+		return nil, "", fmt.Errorf("dialer did not return a *tls.Conn")
 	}
 	state := tlsConn.ConnectionState()
-	return &state, nil
+	ip := ""
+	if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		ip = addr.IP.String()
+	}
+	return &state, ip, nil
 }
 
 // Check performs the handshake for a single domain and returns the classified
@@ -168,7 +175,7 @@ func Check(ctx context.Context, domain string, opts Options) Result {
 		MinVersion:         tls.VersionTLS12,
 	}
 
-	state, err := dial(dialCtx, domain, port, cfg)
+	state, ip, err := dial(dialCtx, domain, port, cfg)
 	if err != nil {
 		res.Err = err.Error()
 		res.Status = StatusError
@@ -184,6 +191,7 @@ func Check(ctx context.Context, domain string, opts Options) Result {
 	res.ExpiresAt = leaf.NotAfter
 	res.Issuer = leaf.Issuer.CommonName
 	res.SubjectAlt = leaf.DNSNames
+	res.ResolvedIP = ip
 
 	// Independent verification using intermediates the server sent.
 	intermediates := x509.NewCertPool()

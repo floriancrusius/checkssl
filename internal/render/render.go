@@ -70,6 +70,7 @@ func MaxDomainWidth(results []cert.Result) int {
 type TableOptions struct {
 	Now          time.Time
 	ColorEnabled bool
+	ShowIP       bool
 }
 
 // Table renders results as an ASCII table with an "expires in" column.
@@ -79,7 +80,23 @@ func Table(w io.Writer, results []cert.Result, opts TableOptions) error {
 		now = time.Now()
 	}
 	width := MaxDomainWidth(results)
-	sep := strings.Repeat("=", width+daysColWidth+20)
+	ipWidth := 0
+	if opts.ShowIP {
+		for _, r := range results {
+			if l := len(r.ResolvedIP); l > ipWidth {
+				ipWidth = l
+			}
+		}
+		if ipWidth < 7 { // room for the "—" placeholder, which is 3 bytes in UTF-8
+			ipWidth = 7
+		}
+	}
+
+	sepLen := width + daysColWidth + 20
+	if opts.ShowIP {
+		sepLen += ipWidth + 3 // " | " plus the column itself
+	}
+	sep := strings.Repeat("=", sepLen)
 
 	if _, err := fmt.Fprintln(w, sep); err != nil {
 		return err
@@ -94,7 +111,17 @@ func Table(w io.Writer, results []cert.Result, opts TableOptions) error {
 		if opts.ColorEnabled {
 			padded = colorFor(r.Status) + padded + ansiReset
 		}
-		row := fmt.Sprintf("| %-*s | %s | %s |", width, r.Domain, date, padded)
+		var row string
+		if opts.ShowIP {
+			ip := r.ResolvedIP
+			if ip == "" {
+				ip = "—"
+			}
+			row = fmt.Sprintf("| %-*s | %-*s | %s | %s |",
+				width, r.Domain, ipWidth, ip, date, padded)
+		} else {
+			row = fmt.Sprintf("| %-*s | %s | %s |", width, r.Domain, date, padded)
+		}
 		if _, err := fmt.Fprintln(w, row); err != nil {
 			return err
 		}
@@ -105,13 +132,24 @@ func Table(w io.Writer, results []cert.Result, opts TableOptions) error {
 	return nil
 }
 
+// CSVOptions controls CSV rendering.
+type CSVOptions struct {
+	Now    time.Time
+	ShowIP bool
+}
+
 // CSV renders results as CSV with a header row.
-func CSV(w io.Writer, results []cert.Result, now time.Time) error {
+func CSV(w io.Writer, results []cert.Result, opts CSVOptions) error {
+	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"Domain", "Expiration", "DaysUntilExpiry"}); err != nil {
+	header := []string{"Domain", "Expiration", "DaysUntilExpiry"}
+	if opts.ShowIP {
+		header = append([]string{"Domain", "IP"}, header[1:]...)
+	}
+	if err := cw.Write(header); err != nil {
 		return err
 	}
 	for _, r := range results {
@@ -123,7 +161,11 @@ func CSV(w io.Writer, results []cert.Result, now time.Time) error {
 		if !r.ExpiresAt.IsZero() {
 			days = fmt.Sprintf("%d", daysBetween(r.ExpiresAt, now))
 		}
-		if err := cw.Write([]string{r.Domain, expiration, days}); err != nil {
+		row := []string{r.Domain, expiration, days}
+		if opts.ShowIP {
+			row = []string{r.Domain, r.ResolvedIP, expiration, days}
+		}
+		if err := cw.Write(row); err != nil {
 			return err
 		}
 	}
@@ -136,13 +178,21 @@ type JSONRecord struct {
 	Domain             string `json:"domain"`
 	Expiration         string `json:"expiration"`
 	DaysUntilExpiry    *int   `json:"daysUntilExpiry"`
+	ResolvedIP         string `json:"resolvedIP,omitempty"`
 	Status             string `json:"status,omitempty"`
 	AuthorizationError string `json:"authorizationError,omitempty"`
 	Error              string `json:"error,omitempty"`
 }
 
+// JSONOptions controls JSON rendering.
+type JSONOptions struct {
+	Now    time.Time
+	ShowIP bool
+}
+
 // JSON renders results as a pretty-printed JSON array.
-func JSON(w io.Writer, results []cert.Result, now time.Time) error {
+func JSON(w io.Writer, results []cert.Result, opts JSONOptions) error {
+	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -157,14 +207,18 @@ func JSON(w io.Writer, results []cert.Result, now time.Time) error {
 			d := daysBetween(r.ExpiresAt, now)
 			days = &d
 		}
-		records = append(records, JSONRecord{
+		rec := JSONRecord{
 			Domain:             r.Domain,
 			Expiration:         expiration,
 			DaysUntilExpiry:    days,
 			Status:             string(r.Status),
 			AuthorizationError: r.AuthError,
 			Error:              r.Err,
-		})
+		}
+		if opts.ShowIP {
+			rec.ResolvedIP = r.ResolvedIP
+		}
+		records = append(records, rec)
 	}
 	buf, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {

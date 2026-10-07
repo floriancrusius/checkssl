@@ -48,9 +48,9 @@ func TestCheck_EmptyDomain(t *testing.T) {
 
 func TestCheck_TrimsDomain(t *testing.T) {
 	var seenHost string
-	dial := func(_ context.Context, host, _ string, _ *tls.Config) (*tls.ConnectionState, error) {
+	dial := func(_ context.Context, host, _ string, _ *tls.Config) (*tls.ConnectionState, string, error) {
 		seenHost = host
-		return nil, errors.New("stop")
+		return nil, "", errors.New("stop")
 	}
 	Check(context.Background(), "  example.com\t", Options{Dialer: dial})
 	if seenHost != "example.com" {
@@ -59,8 +59,8 @@ func TestCheck_TrimsDomain(t *testing.T) {
 }
 
 func TestCheck_DialError(t *testing.T) {
-	dial := func(_ context.Context, _, _ string, _ *tls.Config) (*tls.ConnectionState, error) {
-		return nil, errors.New("connection refused")
+	dial := func(_ context.Context, _, _ string, _ *tls.Config) (*tls.ConnectionState, string, error) {
+		return nil, "", errors.New("connection refused")
 	}
 	r := Check(context.Background(), "example.com", Options{Dialer: dial})
 	if r.Status != StatusError {
@@ -72,8 +72,8 @@ func TestCheck_DialError(t *testing.T) {
 }
 
 func TestCheck_NoPeerCerts(t *testing.T) {
-	dial := func(_ context.Context, _, _ string, _ *tls.Config) (*tls.ConnectionState, error) {
-		return &tls.ConnectionState{}, nil
+	dial := func(_ context.Context, _, _ string, _ *tls.Config) (*tls.ConnectionState, string, error) {
+		return &tls.ConnectionState{}, "", nil
 	}
 	r := Check(context.Background(), "example.com", Options{Dialer: dial})
 	if r.Status != StatusError {
@@ -91,8 +91,8 @@ func TestCheck_CopiesCertFields(t *testing.T) {
 		Issuer:   pkix.Name{CommonName: "Test CA"},
 		DNSNames: []string{"example.com", "www.example.com"},
 	}
-	dial := func(_ context.Context, _, _ string, _ *tls.Config) (*tls.ConnectionState, error) {
-		return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}, nil
+	dial := func(_ context.Context, _, _ string, _ *tls.Config) (*tls.ConnectionState, string, error) {
+		return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}, "198.51.100.42", nil
 	}
 	r := Check(context.Background(), "example.com", Options{Now: now, Dialer: dial})
 
@@ -112,6 +112,9 @@ func TestCheck_CopiesCertFields(t *testing.T) {
 	}
 	if r.AuthError == "" {
 		t.Error("expected AuthError to be populated for unauthorized leaf")
+	}
+	if r.ResolvedIP != "198.51.100.42" {
+		t.Errorf("ResolvedIP = %q, want 198.51.100.42", r.ResolvedIP)
 	}
 }
 
@@ -175,7 +178,7 @@ func TestDialPreferIPv4_FallsBackWhenIPv4Fails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	_, err := dialPreferIPv4(ctx, "example.invalid", "443",
+	_, _, err := dialPreferIPv4(ctx, "example.invalid", "443",
 		&tls.Config{ServerName: "example.invalid", MinVersion: tls.VersionTLS12}, resolve)
 	if err == nil {
 		t.Fatal("expected an error when every address is unreachable")
@@ -190,7 +193,7 @@ func TestDialPreferIPv4_ResolverError(t *testing.T) {
 	resolve := func(_ context.Context, _ string) ([]net.IPAddr, error) {
 		return nil, errors.New("nxdomain")
 	}
-	_, err := dialPreferIPv4(context.Background(), "nope.example", "443",
+	_, _, err := dialPreferIPv4(context.Background(), "nope.example", "443",
 		&tls.Config{}, resolve)
 	if err == nil || !strings.Contains(err.Error(), "nxdomain") {
 		t.Errorf("expected resolver error to propagate, got: %v", err)
@@ -206,7 +209,7 @@ func TestDialPreferIPv4_IPLiteralSkipsResolver(t *testing.T) {
 	// the resolver wasn't invoked.
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, _ = dialPreferIPv4(ctx, "192.0.2.1", "443",
+	_, _, _ = dialPreferIPv4(ctx, "192.0.2.1", "443",
 		//nolint:gosec // test-only; the connection won't complete anyway.
 		&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, resolve)
 }

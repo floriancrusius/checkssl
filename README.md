@@ -89,6 +89,7 @@ checkssl -f domains.txt --concurrency 200
 | `    --nagios-warning <n>`    | warn threshold in days (default `30`, nagios only)  |
 | `    --nagios-critical <n>`   | critical threshold in days (default `14`, nagios only) |
 | `    --only <status,...>`     | only show rows with a matching status; exit 1 if any match, 0 otherwise |
+| `    --show-ip`               | add the resolved IP address as a column (table/csv/json/html) |
 | `-h, --help`                  | show help                                           |
 | `-v, --version`               | show version                                        |
 

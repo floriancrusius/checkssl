@@ -70,6 +70,7 @@ type cliOptions struct {
 	nagiosWarnDays int
 	nagiosCritDays int
 	only           string
+	showIP         bool
 }
 
 // allowedOnlyStatuses lists the status values --only accepts.
@@ -213,12 +214,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch opts.format {
 	case "csv":
-		if err := render.CSV(stdout, sorted, time.Time{}); err != nil {
+		if err := render.CSV(stdout, sorted, render.CSVOptions{ShowIP: opts.showIP}); err != nil {
 			fmt.Fprintln(stderr, "error rendering CSV:", err)
 			return exitCodeError
 		}
 	case "json":
-		if err := render.JSON(stdout, sorted, time.Time{}); err != nil {
+		if err := render.JSON(stdout, sorted, render.JSONOptions{ShowIP: opts.showIP}); err != nil {
 			fmt.Fprintln(stderr, "error rendering JSON:", err)
 			return exitCodeError
 		}
@@ -234,12 +235,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// Nagios plugins own the exit code: 0/1/2/3 = OK/WARN/CRIT/UNKNOWN.
 		return int(status)
 	case "html":
-		if err := render.HTML(stdout, sorted, render.HTMLOptions{}); err != nil {
+		if err := render.HTML(stdout, sorted, render.HTMLOptions{ShowIP: opts.showIP}); err != nil {
 			fmt.Fprintln(stderr, "error rendering HTML:", err)
 			return exitCodeError
 		}
 	default:
-		if err := render.Table(stdout, sorted, render.TableOptions{ColorEnabled: colorEnabled}); err != nil {
+		if err := render.Table(stdout, sorted, render.TableOptions{ColorEnabled: colorEnabled, ShowIP: opts.showIP}); err != nil {
 			fmt.Fprintln(stderr, "error rendering table:", err)
 			return exitCodeError
 		}
@@ -298,6 +299,7 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.IntVar(&opts.nagiosWarnDays, "nagios-warning", 30, "warn threshold in days for --format nagios")
 	fs.IntVar(&opts.nagiosCritDays, "nagios-critical", 14, "critical threshold in days for --format nagios")
 	fs.StringVar(&opts.only, "only", "", "comma-separated statuses to include (valid, expiring_soon, expired, invalid, error)")
+	fs.BoolVar(&opts.showIP, "show-ip", false, "include the resolved IP address in table/csv/json/html output")
 
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -323,6 +325,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "      --only <status,...>    only show rows whose status is in the list;")
 	fmt.Fprintln(w, "                             exits non-zero when any row matches, 0 when none.")
 	fmt.Fprintln(w, "                             statuses: valid, expiring_soon, expired, invalid, error")
+	fmt.Fprintln(w, "      --show-ip              include the resolved IP in table/csv/json/html output")
 	fmt.Fprintln(w, "  -h, --help              show this help")
 	fmt.Fprintln(w, "  -v, --version           show version")
 	fmt.Fprintln(w)

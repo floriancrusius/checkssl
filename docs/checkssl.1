@@ -83,6 +83,23 @@ checkssl -f ~/.checkssl --only error,invalid,expired \\
 .B \-\-format nagios
 owns its own exit code and ignores this behaviour.
 .TP
+.BR \-\-show\-ip
+Include the resolved IP address in the table, CSV, JSON and HTML
+output. For the table a new column is inserted between
+.B Domain
+and
+.BR Expiration .
+CSV gains an
+.B IP
+column after
+.BR Domain .
+JSON gains a
+.B resolvedIP
+field. The IP shown is whichever address the TLS handshake actually
+connected over \(em with IPv4 preferred.
+.BR "\-\-format nagios"
+ignores this flag.
+.TP
 .BR \-h ", " \-\-help
 Print help.
 .TP
