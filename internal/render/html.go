@@ -403,10 +403,31 @@ const htmlMonitorTemplate = `<!DOCTYPE html>
   }
 
   .m-list { border-top: 1px solid var(--border); }
-  .m-row {
+  .m-list-head, .m-row {
     display: grid;
     grid-template-columns: 4px minmax(0, 2.6fr){{if .ShowIP}} minmax(130px, 1.2fr){{end}} minmax(0, 1.1fr) 70px minmax(140px, 1.6fr) minmax(0, 1.2fr);
     gap: 16px; padding-right: 20px; align-items: center;
+  }
+  .m-list-head {
+    min-height: 36px; background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); font-weight: 500;
+  }
+  .m-list-head .m-sort {
+    appearance: none; background: transparent; border: 0;
+    color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit;
+    cursor: pointer; padding: 0; text-align: left;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .m-list-head .m-sort[data-align="right"] { justify-content: flex-end; text-align: right; }
+  .m-list-head .m-sort:hover { color: var(--fg); }
+  .m-list-head .m-sort[aria-sort="ascending"],
+  .m-list-head .m-sort[aria-sort="descending"] { color: var(--fg); }
+  .m-list-head .m-sort[aria-sort]::after { content: ""; display: inline-block; opacity: 0.6; }
+  .m-list-head .m-sort[aria-sort="ascending"]::after  { content: " ▲"; }
+  .m-list-head .m-sort[aria-sort="descending"]::after { content: " ▼"; }
+  .m-row {
     border-bottom: 1px solid var(--border); min-height: 56px;
     background: var(--surface);
   }
@@ -542,8 +563,21 @@ const htmlMonitorTemplate = `<!DOCTYPE html>
 
     <div class="m-list" id="report">
       {{$showIP := .ShowIP}}
+      <div class="m-list-head" role="row">
+        <div></div>
+        <button type="button" class="m-sort" data-sort="domain">Domain</button>
+        {{if $showIP}}<button type="button" class="m-sort" data-sort="ip">IP</button>{{end}}
+        <div></div>
+        <button type="button" class="m-sort" data-sort="days" data-align="right" aria-sort="ascending">Days</button>
+        <div></div>
+        <button type="button" class="m-sort" data-sort="issuer">Issuer</button>
+      </div>
       {{range .Rows}}
-      <div class="m-row" data-s="{{.VisualClass}}" data-status="{{.Status}}">
+      <div class="m-row" data-s="{{.VisualClass}}" data-status="{{.Status}}"
+           data-sort-domain="{{.Domain}}"
+           {{if $showIP}}data-sort-ip="{{.IP}}"{{end}}
+           data-sort-days="{{if .HasDays}}{{.DaysInt}}{{else}}999999{{end}}"
+           data-sort-issuer="{{.Issuer}}">
         <div class="m-stripe"></div>
         <div class="m-domain">
           <span class="d">{{.Domain}}</span>
@@ -641,6 +675,33 @@ const htmlMonitorTemplate = `<!DOCTYPE html>
       search.value = "";
       chips.forEach(c => { active.add(c.dataset.status); c.classList.remove("off"); c.classList.add("on"); });
       applyFilter();
+    });
+
+    // --- sorting ---
+    const list = document.getElementById("report");
+    const sorters = document.querySelectorAll(".m-sort[data-sort]");
+    function sortRows(key, dir) {
+      const sign = dir === "desc" ? -1 : 1;
+      const ordered = Array.from(rows).sort((a, b) => {
+        if (key === "days") {
+          return sign * (parseInt(a.dataset.sortDays, 10) - parseInt(b.dataset.sortDays, 10));
+        }
+        const attr = "sort" + key.charAt(0).toUpperCase() + key.slice(1);
+        const av = (a.dataset[attr] || "").toLowerCase();
+        const bv = (b.dataset[attr] || "").toLowerCase();
+        return sign * av.localeCompare(bv);
+      });
+      ordered.forEach(r => list.appendChild(r));
+    }
+    sorters.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.sort;
+        const cur = btn.getAttribute("aria-sort");
+        const next = cur === "ascending" ? "descending" : "ascending";
+        sorters.forEach(b => b.removeAttribute("aria-sort"));
+        btn.setAttribute("aria-sort", next);
+        sortRows(key, next === "descending" ? "desc" : "asc");
+      });
     });
 
     applyFilter();
@@ -763,6 +824,17 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
     border-bottom: 1px solid var(--rule);
     padding-top: 6px; padding-bottom: 6px;
   }
+  .t-list-head .t-sort {
+    appearance: none; background: transparent; border: 0;
+    color: inherit; font: inherit; text-transform: inherit;
+    cursor: pointer; padding: 0; text-align: left;
+  }
+  .t-list-head .t-sort[data-align="right"] { text-align: right; width: 100%; }
+  .t-list-head .t-sort:hover { color: var(--fg); }
+  .t-list-head .t-sort[aria-sort="ascending"],
+  .t-list-head .t-sort[aria-sort="descending"] { color: var(--prompt); }
+  .t-list-head .t-sort[aria-sort="ascending"]::after  { content: " ▲"; }
+  .t-list-head .t-sort[aria-sort="descending"]::after { content: " ▼"; }
   .t-list-row:hover,
   .t-list-row.active {
     background: color-mix(in oklab, var(--panel), transparent 30%);
@@ -908,17 +980,21 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
         <button type="button" class="chip" id="reset" title="Reset">reset</button>
       </div>
 
+      {{$showIP := .ShowIP}}
       <div class="t-list-head">
         <span>  </span>
-        <span>domain</span>
-        {{if .ShowIP}}<span class="h-ip">ip</span>{{end}}
-        <span style="text-align:right">days</span>
-        <span class="h-exp">expires</span>
-        <span>status · note</span>
+        <button type="button" class="t-sort" data-sort="domain">domain</button>
+        {{if $showIP}}<button type="button" class="t-sort h-ip" data-sort="ip">ip</button>{{end}}
+        <button type="button" class="t-sort" data-sort="days" data-align="right" aria-sort="ascending">days</button>
+        <button type="button" class="t-sort h-exp" data-sort="days">expires</button>
+        <button type="button" class="t-sort" data-sort="status">status · note</button>
       </div>
-      {{$showIP := .ShowIP}}
       {{range .Rows}}
-      <div class="t-list-row" data-s="{{.VisualClass}}" data-status="{{.Status}}">
+      <div class="t-list-row" data-s="{{.VisualClass}}" data-status="{{.Status}}"
+           data-sort-domain="{{.Domain}}"
+           {{if $showIP}}data-sort-ip="{{.IP}}"{{end}}
+           data-sort-days="{{if .HasDays}}{{.DaysInt}}{{else}}999999{{end}}"
+           data-sort-status="{{.Status}}">
         <span class="marker">{{.Marker}}</span>
         <span class="t-domain">{{.Domain}}</span>
         {{if $showIP}}<span class="t-ip">{{if .IP}}{{.IP}}{{else}}—{{end}}</span>{{end}}
@@ -932,6 +1008,7 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
         <span class="t-keys">
           <kbd>j</kbd>/<kbd>k</kbd> nav ·
           <kbd>g</kbd>/<kbd>G</kbd> ends ·
+          <kbd>s</kbd> sort ·
           <kbd>1</kbd>–<kbd>5</kbd> toggle ·
           <kbd>/</kbd> find ·
           <kbd>r</kbd> reset ·
@@ -951,6 +1028,7 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
         <dt><kbd>j</kbd> / <kbd>k</kbd></dt>  <dd>next / previous host</dd>
         <dt><kbd>g</kbd> / <kbd>G</kbd></dt>  <dd>first / last host</dd>
         <dt><kbd>1</kbd>–<kbd>5</kbd></dt>    <dd>toggle valid · warn · expired · invalid · down</dd>
+        <dt><kbd>s</kbd> / <kbd>S</kbd></dt>  <dd>cycle sort column (forward / backward)</dd>
         <dt><kbd>/</kbd></dt>                 <dd>focus filter box</dd>
         <dt><kbd>r</kbd></dt>                 <dd>reset filter &amp; chips</dd>
         <dt><kbd>Esc</kbd></dt>               <dd>close help · clear filter</dd>
@@ -1006,6 +1084,46 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
       chips.forEach(c => { active.add(c.dataset.status); c.classList.remove("off"); c.classList.add("on"); });
       applyFilter();
     });
+
+    // --- sorting ---
+    const list = document.getElementById("report");
+    // Severity order for sort by status: ok < warn < hot < crit < error.
+    const statusOrder = { valid: 0, expiring_soon: 1, hot: 2, expired: 3, invalid: 4, error: 5 };
+    const sorters = Array.from(document.querySelectorAll(".t-sort[data-sort]"));
+    // Multiple buttons may share the same sort key (e.g. days and expires both
+    // sort by days). Collapse to one logical key per button for cycling.
+    function sortRows(key, dir) {
+      const sign = dir === "desc" ? -1 : 1;
+      const ordered = Array.from(rows).sort((a, b) => {
+        if (key === "days") {
+          return sign * (parseInt(a.dataset.sortDays, 10) - parseInt(b.dataset.sortDays, 10));
+        }
+        if (key === "status") {
+          return sign * ((statusOrder[a.dataset.sortStatus] ?? 9) - (statusOrder[b.dataset.sortStatus] ?? 9));
+        }
+        const attr = "sort" + key.charAt(0).toUpperCase() + key.slice(1);
+        const av = (a.dataset[attr] || "").toLowerCase();
+        const bv = (b.dataset[attr] || "").toLowerCase();
+        return sign * av.localeCompare(bv);
+      });
+      ordered.forEach(r => list.appendChild(r));
+    }
+    sorters.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.sort;
+        const cur = btn.getAttribute("aria-sort");
+        const next = cur === "ascending" ? "descending" : "ascending";
+        sorters.forEach(b => b.removeAttribute("aria-sort"));
+        btn.setAttribute("aria-sort", next);
+        sortRows(key, next === "descending" ? "desc" : "asc");
+      });
+    });
+    function cycleSort(delta) {
+      const cur = sorters.findIndex(b => b.hasAttribute("aria-sort"));
+      const start = cur < 0 ? 0 : cur;
+      const idx = ((start + delta) % sorters.length + sorters.length) % sorters.length;
+      sorters[idx].click();
+    }
 
     // --- keyboard navigation + help overlay ---
     const help = document.getElementById("help");
@@ -1072,6 +1190,8 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
         case "g": e.preventDefault(); moveCursor(0, 0); break;
         case "G": e.preventDefault(); moveCursor(0, 999999); break;
         case "r": e.preventDefault(); reset.click(); break;
+        case "s": e.preventDefault(); cycleSort(+1); break;
+        case "S": e.preventDefault(); cycleSort(-1); break;
         case "1": case "2": case "3": case "4": case "5":
           e.preventDefault();
           const idx = parseInt(e.key, 10) - 1;
