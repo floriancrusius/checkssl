@@ -11,14 +11,20 @@ _checkssl() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    flags='-d --domain -f --file -s --silent --format --concurrency --timeout --nagios-warning --nagios-critical --only --show-ip -h --help -v --version'
+    flags='-d --domain -f --file -s --silent --format --concurrency --timeout --nagios-warning --nagios-critical --only --show-ip --html-style -h --help -v --version'
     formats='table csv json nagios html'
     statuses='valid expiring_soon expired invalid error'
+    htmlStyles='monitor terminal'
 
     case "$prev" in
         --format)
             # shellcheck disable=SC2207
             COMPREPLY=( $(compgen -W "$formats" -- "$cur") )
+            return 0
+            ;;
+        --html-style)
+            # shellcheck disable=SC2207
+            COMPREPLY=( $(compgen -W "$htmlStyles" -- "$cur") )
             return 0
             ;;
         --only)

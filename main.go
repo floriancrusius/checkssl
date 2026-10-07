@@ -71,6 +71,7 @@ type cliOptions struct {
 	nagiosCritDays int
 	only           string
 	showIP         bool
+	htmlStyle      string
 }
 
 // allowedOnlyStatuses lists the status values --only accepts.
@@ -235,7 +236,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// Nagios plugins own the exit code: 0/1/2/3 = OK/WARN/CRIT/UNKNOWN.
 		return int(status)
 	case "html":
-		if err := render.HTML(stdout, sorted, render.HTMLOptions{ShowIP: opts.showIP}); err != nil {
+		if err := render.HTML(stdout, sorted, render.HTMLOptions{
+			ShowIP: opts.showIP,
+			Style:  opts.htmlStyle,
+		}); err != nil {
 			fmt.Fprintln(stderr, "error rendering HTML:", err)
 			return exitCodeError
 		}
@@ -300,6 +304,7 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.IntVar(&opts.nagiosCritDays, "nagios-critical", 14, "critical threshold in days for --format nagios")
 	fs.StringVar(&opts.only, "only", "", "comma-separated statuses to include (valid, expiring_soon, expired, invalid, error)")
 	fs.BoolVar(&opts.showIP, "show-ip", false, "include the resolved IP address in table/csv/json/html output")
+	fs.StringVar(&opts.htmlStyle, "html-style", render.HTMLStyleMonitor, "visual style for --format html: monitor or terminal")
 
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -326,6 +331,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "                             exits non-zero when any row matches, 0 when none.")
 	fmt.Fprintln(w, "                             statuses: valid, expiring_soon, expired, invalid, error")
 	fmt.Fprintln(w, "      --show-ip              include the resolved IP in table/csv/json/html output")
+	fmt.Fprintln(w, "      --html-style <style>   HTML visual style: monitor (default) or terminal")
 	fmt.Fprintln(w, "  -h, --help              show this help")
 	fmt.Fprintln(w, "  -v, --version           show version")
 	fmt.Fprintln(w)

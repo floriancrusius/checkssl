@@ -90,6 +90,7 @@ checkssl -f domains.txt --concurrency 200
 | `    --nagios-critical <n>`   | critical threshold in days (default `14`, nagios only) |
 | `    --only <status,...>`     | only show rows with a matching status; exit 1 if any match, 0 otherwise |
 | `    --show-ip`               | add the resolved IP address as a column (table/csv/json/html) |
+| `    --html-style <style>`    | HTML visual style: `monitor` (default) or `terminal`         |
 | `-h, --help`                  | show help                                           |
 | `-v, --version`               | show version                                        |
 
@@ -161,15 +162,20 @@ www.example.com,03.01.2026,102
 
 ### `html`
 
-Standalone HTML report with inline CSS, dark-mode support, click-to-sort
-columns, per-status toggle chips (click "5 expired" to hide/show that
-bucket) and a live search box that filters rows against every visible
-cell — domain, issuer, error note, everything. Suitable for emailing,
-dropping into a static file server, or printing. No external assets —
-one `.html` file, no CDN.
+Standalone HTML report with inline CSS, per-status toggle chips and a
+live search box that filters rows against every cell. Two visual
+styles, pick with `--html-style`:
+
+- **monitor** (default) — dashboard look: metric tiles across the top,
+  severity stripe + days-remaining bar on every row, follows the
+  viewer's light/dark theme.
+- **terminal** — monospace terminal mock, box-drawing frames,
+  phosphor-coloured status badges, dark-committed. `/` focuses the
+  filter box.
 
 ```
-checkssl -f ~/.checkssl --format html > report.html
+checkssl -f ~/.checkssl --format html > report.html                   # monitor
+checkssl -f ~/.checkssl --format html --html-style terminal > tty.html
 open report.html
 ```
 

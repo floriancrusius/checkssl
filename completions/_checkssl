@@ -18,6 +18,7 @@ _checkssl() {
         '--nagios-critical[critical threshold in days (nagios only)]:n:' \
         '--only[comma-separated statuses to include]:status:(valid expiring_soon expired invalid error)' \
         '--show-ip[include resolved IP in table/csv/json/html]' \
+        '--html-style[HTML visual style]:style:(monitor terminal)' \
         '(-h --help)'{-h,--help}'[show help]' \
         '(-v --version)'{-v,--version}'[show version]' \
         '1: :->cmd' \

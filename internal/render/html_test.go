@@ -39,10 +39,10 @@ func TestHTML_ContainsExpectedSections(t *testing.T) {
 		`data-status="expired"`,
 		`data-status="invalid"`,
 		`data-status="error"`,
-		">1 valid</button>",
-		">1 expiring soon</button>",
-		">1 expired</button>",
-		">1 error</button>",
+		">1 valid</span>",
+		">1 expiring soon</span>",
+		"1 expired",
+		"1 error",
 		"timeout",
 	}
 	for _, s := range must {
@@ -110,14 +110,55 @@ func TestHTML_CustomTitle(t *testing.T) {
 	}
 }
 
+func TestHTML_TerminalStyle(t *testing.T) {
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	results := []cert.Result{
+		{Domain: "example.com", ExpiresAt: now.Add(90 * 24 * time.Hour),
+			Status: cert.StatusValid, Issuer: "Test CA"},
+		{Domain: "broken.example", Status: cert.StatusError, Err: "timeout"},
+	}
+	var buf bytes.Buffer
+	if err := HTML(&buf, results, HTMLOptions{Now: now, GeneratedAt: now, Style: HTMLStyleTerminal}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	must := []string{
+		`class="t-list-row"`,
+		`class="t-summary"`,
+		`JetBrains+Mono`,
+		`class="t-status ok"`,
+		`class="t-status err"`,
+		`class="t-prompt"`,
+		`applyFilter`,
+		`id="filter"`,
+	}
+	for _, s := range must {
+		if !strings.Contains(out, s) {
+			t.Errorf("terminal output missing %q", s)
+		}
+	}
+	// Monitor-only artefacts should not appear.
+	if strings.Contains(out, "m-tile") {
+		t.Error("terminal output should not contain monitor tiles")
+	}
+}
+
+func TestHTML_UnknownStyleRejected(t *testing.T) {
+	var buf bytes.Buffer
+	err := HTML(&buf, nil, HTMLOptions{Style: "chartjs"})
+	if err == nil || !strings.Contains(err.Error(), "unknown html style") {
+		t.Fatalf("expected unknown-style error, got %v", err)
+	}
+}
+
 func TestHTML_EmptyResults(t *testing.T) {
 	var buf bytes.Buffer
 	if err := HTML(&buf, nil, HTMLOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "0 domain(s)") {
-		t.Errorf("expected '0 domain(s)' in output")
+	if !strings.Contains(out, "0 host(s)") {
+		t.Errorf("expected '0 host(s)' in output")
 	}
 	if !strings.Contains(out, "</html>") {
 		t.Error("template did not render completely")

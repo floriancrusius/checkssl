@@ -156,10 +156,24 @@ and optional
 .BR authorizationError " / " error
 fields.
 .SS html
-Standalone HTML report with inline CSS, dark-mode support,
-click-to-sort columns, per-status toggle chips and a live search box
-that filters rows against every visible cell. Suitable for saving to
-a file, attaching to an email or serving from a static file server.
+Standalone HTML report with inline CSS, per-status toggle chips and a
+live search box that filters rows against every visible cell. Pick a
+style with
+.BR \-\-html\-style :
+.TP
+.B monitor
+(default) \(em dashboard look with metric tiles across the top, a
+severity stripe on each row and a visual bar for days remaining.
+Follows the viewer's light/dark preference.
+.TP
+.B terminal
+monospace terminal mock with box-drawing frames and phosphor-coloured
+status badges. Dark-committed; press
+.RB \(oq / \(cq
+anywhere to focus the filter.
+.PP
+Both styles are self-contained HTML files, safe to save, email or
+drop into a static file server.
 .SS nagios
 Single-line plugin output:
 .PP
