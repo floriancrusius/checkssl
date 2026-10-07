@@ -69,6 +69,66 @@ type cliOptions struct {
 	timeout        time.Duration
 	nagiosWarnDays int
 	nagiosCritDays int
+	only           string
+}
+
+// allowedOnlyStatuses lists the status values --only accepts.
+var allowedOnlyStatuses = []cert.Status{
+	cert.StatusValid,
+	cert.StatusExpiringSoon,
+	cert.StatusExpired,
+	cert.StatusInvalid,
+	cert.StatusError,
+}
+
+// parseOnly turns a comma-separated list like "error,invalid" into a set of
+// recognised statuses. Returns an error naming the offending value if any
+// token is not a valid status.
+func parseOnly(spec string) (map[cert.Status]struct{}, error) {
+	if spec == "" {
+		return nil, nil
+	}
+	set := make(map[cert.Status]struct{})
+	for _, raw := range strings.Split(spec, ",") {
+		token := strings.TrimSpace(strings.ToLower(raw))
+		// Accept both "expiring_soon" and "expiring-soon" since humans type both.
+		token = strings.ReplaceAll(token, "-", "_")
+		if token == "" {
+			continue
+		}
+		ok := false
+		for _, s := range allowedOnlyStatuses {
+			if token == string(s) {
+				set[s] = struct{}{}
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			names := make([]string, len(allowedOnlyStatuses))
+			for i, s := range allowedOnlyStatuses {
+				names[i] = string(s)
+			}
+			return nil, fmt.Errorf("unknown status %q — expected one of %s",
+				raw, strings.Join(names, ", "))
+		}
+	}
+	return set, nil
+}
+
+// filterByStatus returns the subset of results whose Status is in `allow`.
+// A nil `allow` is treated as "no filter" and returns the input unchanged.
+func filterByStatus(results []cert.Result, allow map[cert.Status]struct{}) []cert.Result {
+	if allow == nil {
+		return results
+	}
+	out := make([]cert.Result, 0, len(results))
+	for _, r := range results {
+		if _, ok := allow[r.Status]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func main() {
@@ -105,6 +165,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitCodeUsageError
 	}
 
+	onlySet, onlyErr := parseOnly(opts.only)
+	if onlyErr != nil {
+		fmt.Fprintln(stderr, "error:", onlyErr)
+		return exitCodeUsageError
+	}
+
 	var errs []string
 	addErr := func(s string) { errs = append(errs, s) }
 
@@ -134,6 +200,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	sorted := render.SortByExpiry(results)
+	sorted = filterByStatus(sorted, onlySet)
+
+	// --only + empty result set + table: emit nothing. This is the alerter
+	// workflow — pipe stdout into a notifier, fire only when the output is
+	// non-empty.
+	if onlySet != nil && len(sorted) == 0 {
+		return exitCodeSuccess
+	}
 
 	colorEnabled := shouldColor(stdout)
 
@@ -175,7 +249,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		render.PrintErrors(stderr, errs)
 	}
 
-	// Non-zero exit if any domain came back as expired / invalid / errored.
+	// With --only, exit non-zero when the filter matched anything — turns
+	// `checkssl --only error,invalid,expired` into a clean cron probe:
+	// exit 1 with the offending rows on stdout, exit 0 silent otherwise.
+	if onlySet != nil {
+		if len(sorted) > 0 {
+			return exitCodeError
+		}
+		return exitCodeSuccess
+	}
+
+	// Default exit-code logic: non-zero if any domain came back as
+	// expired / invalid / errored.
 	for _, r := range results {
 		switch r.Status {
 		case cert.StatusExpired, cert.StatusInvalid, cert.StatusError:
@@ -212,6 +297,7 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.DurationVar(&opts.timeout, "timeout", defaultTimeoutSecs*time.Second, "per-domain TLS handshake timeout")
 	fs.IntVar(&opts.nagiosWarnDays, "nagios-warning", 30, "warn threshold in days for --format nagios")
 	fs.IntVar(&opts.nagiosCritDays, "nagios-critical", 14, "critical threshold in days for --format nagios")
+	fs.StringVar(&opts.only, "only", "", "comma-separated statuses to include (valid, expiring_soon, expired, invalid, error)")
 
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -234,6 +320,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "      --timeout <dur>     per-domain handshake timeout (default 5s)")
 	fmt.Fprintln(w, "      --nagios-warning <n>   days threshold (default 30, --format nagios only)")
 	fmt.Fprintln(w, "      --nagios-critical <n>  days threshold (default 14, --format nagios only)")
+	fmt.Fprintln(w, "      --only <status,...>    only show rows whose status is in the list;")
+	fmt.Fprintln(w, "                             exits non-zero when any row matches, 0 when none.")
+	fmt.Fprintln(w, "                             statuses: valid, expiring_soon, expired, invalid, error")
 	fmt.Fprintln(w, "  -h, --help              show this help")
 	fmt.Fprintln(w, "  -v, --version           show version")
 	fmt.Fprintln(w)

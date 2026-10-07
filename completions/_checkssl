@@ -16,6 +16,7 @@ _checkssl() {
         '--timeout[per-domain handshake timeout]:duration:' \
         '--nagios-warning[warn threshold in days (nagios only)]:n:' \
         '--nagios-critical[critical threshold in days (nagios only)]:n:' \
+        '--only[comma-separated statuses to include]:status:(valid expiring_soon expired invalid error)' \
         '(-h --help)'{-h,--help}'[show help]' \
         '(-v --version)'{-v,--version}'[show version]' \
         '1: :->cmd' \

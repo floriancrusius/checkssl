@@ -88,6 +88,7 @@ checkssl -f domains.txt --concurrency 200
 | `    --timeout <dur>`         | per-domain handshake timeout (default `5s`)         |
 | `    --nagios-warning <n>`    | warn threshold in days (default `30`, nagios only)  |
 | `    --nagios-critical <n>`   | critical threshold in days (default `14`, nagios only) |
+| `    --only <status,...>`     | only show rows with a matching status; exit 1 if any match, 0 otherwise |
 | `-h, --help`                  | show help                                           |
 | `-v, --version`               | show version                                        |
 
@@ -222,11 +223,16 @@ That makes `checkssl` a drop-in cron / CI probe:
 
 ```cron
 # ~/.crontab — nightly at 06:00, alert via ntfy on any red
-0 6 * * *  checkssl -f ~/.checkssl -s || curl -H "Priority: high" \
-             -H "Title: SSL check failed" \
-             -d "$(checkssl -f ~/.checkssl --format json)" \
-             https://ntfy.example.com/ssl
+0 6 * * *  out=$(checkssl -f ~/.checkssl --only error,invalid,expired) \
+             && [ -n "$out" ] \
+             && curl -H "Priority: high" -H "Title: SSL check failed" \
+                 -d "$out" https://ntfy.example.com/ssl
 ```
+
+`--only` turns `checkssl` into a self-silencing probe: it prints nothing
+and exits `0` when every domain is green, and prints only the matching
+rows (and exits `1`) when something is wrong. Great for pipelines where
+"no output" means "no problem".
 
 ## Development
 

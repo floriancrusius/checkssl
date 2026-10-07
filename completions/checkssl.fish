@@ -11,6 +11,7 @@ complete -c checkssl      -l concurrency -x    -d 'Max parallel TLS handshakes'
 complete -c checkssl      -l timeout     -x    -d 'Per-domain handshake timeout'
 complete -c checkssl      -l nagios-warning  -x -d 'Warn threshold in days (nagios only)'
 complete -c checkssl      -l nagios-critical -x -d 'Critical threshold in days (nagios only)'
+complete -c checkssl      -l only        -x -a 'valid expiring_soon expired invalid error' -d 'Only show rows matching one of these statuses'
 complete -c checkssl -s h -l help              -d 'Show help'
 complete -c checkssl -s v -l version           -d 'Show version'
 

@@ -62,6 +62,27 @@ Critical threshold in days for
 .BR "\-\-format nagios" .
 Default 14.
 .TP
+.BR \-\-only " " \fISTATUS,...\fR
+Comma-separated list of status buckets to keep in the output. Rows
+with any other status are hidden. Accepted values:
+.BR valid ", " expiring_soon ", " expired ", " invalid ", " error
+(hyphens are accepted too, e.g.
+.BR expiring\-soon ).
+Changes the exit code: 1 when at least one row matches the filter,
+0 when none match. This makes
+.B checkssl
+a self-silencing cron probe:
+.PP
+.RS
+.EX
+checkssl -f ~/.checkssl --only error,invalid,expired \\
+    || curl -d "$(checkssl -f ~/.checkssl --only error,invalid,expired)" ntfy
+.EE
+.RE
+.PP
+.B \-\-format nagios
+owns its own exit code and ignores this behaviour.
+.TP
 .BR \-h ", " \-\-help
 Print help.
 .TP
