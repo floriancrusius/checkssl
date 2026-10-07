@@ -58,23 +58,31 @@ func TestHTML_HasFilterControls(t *testing.T) {
 		{Domain: "example.com", ExpiresAt: now.Add(90 * 24 * time.Hour),
 			Status: cert.StatusValid},
 	}
-	var buf bytes.Buffer
-	if err := HTML(&buf, results, HTMLOptions{Now: now, GeneratedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
+	for _, style := range []string{HTMLStyleMonitor, HTMLStyleTerminal} {
+		t.Run(style, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := HTML(&buf, results, HTMLOptions{Now: now, GeneratedAt: now, Style: style}); err != nil {
+				t.Fatal(err)
+			}
+			out := buf.String()
 
-	// Search input, reset button, count label and per-status toggle chips.
-	must := []string{
-		`<input type="search" id="filter"`,
-		`id="reset"`,
-		`id="count"`,
-		`applyFilter`,
-	}
-	for _, s := range must {
-		if !strings.Contains(out, s) {
-			t.Errorf("filter UI missing %q\n%s", s, out)
-		}
+			must := []string{
+				`id="filter"`,
+				`id="reset"`,
+				`id="count"`,
+				`applyFilter`,
+				// Grid rows set their own `display`, which otherwise overrides
+				// the hidden attribute toggled by applyFilter. The rule below
+				// is what actually hides filtered rows.
+				`[hidden]`,
+				`display: none`,
+			}
+			for _, s := range must {
+				if !strings.Contains(out, s) {
+					t.Errorf("filter UI missing %q", s)
+				}
+			}
+		})
 	}
 }
 

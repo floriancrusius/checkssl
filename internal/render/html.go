@@ -307,6 +307,7 @@ const htmlMonitorTemplate = `<!DOCTYPE html>
     color-scheme: dark;
   }
   * { box-sizing: border-box; min-width: 0; }
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--bg);
@@ -680,6 +681,7 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
     color-scheme: dark;
   }
   * { box-sizing: border-box; min-width: 0; }
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 13px/1.55 "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
