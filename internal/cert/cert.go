@@ -53,14 +53,77 @@ type Options struct {
 // Dialer abstracts a TLS dialer so tests can inject a fake.
 type Dialer func(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, error)
 
+// Resolver abstracts host-to-IP resolution so tests can inject a fake.
+type Resolver func(ctx context.Context, host string) ([]net.IPAddr, error)
+
+func defaultResolver(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
+// defaultDialer resolves `host`, prefers IPv4 addresses over IPv6, and tries
+// each in turn until one connects. This keeps `checkssl` working on machines
+// where IPv6 is disabled or unreachable but the server also publishes an
+// A record — the common case. If the host is a literal IP, no resolution
+// happens.
 func defaultDialer(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, error) {
-	d := &net.Dialer{}
-	conn, err := tls.DialWithDialer(d, "tcp", net.JoinHostPort(host, port), cfg)
+	return dialPreferIPv4(ctx, host, port, cfg, defaultResolver)
+}
+
+func dialPreferIPv4(ctx context.Context, host, port string, cfg *tls.Config, resolve Resolver) (*tls.ConnectionState, error) {
+	// IP literal → dial directly, no resolution.
+	if net.ParseIP(host) != nil {
+		return tlsDial(ctx, host, port, cfg)
+	}
+
+	ips, err := resolve(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no addresses for %s", host)
+	}
+
+	var lastErr error
+	for _, ip := range preferIPv4(ips) {
+		state, err := tlsDial(ctx, ip.String(), port, cfg)
+		if err == nil {
+			return state, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// preferIPv4 returns a copy of `ips` with IPv4 addresses in front, preserving
+// relative order inside each family.
+func preferIPv4(ips []net.IPAddr) []net.IPAddr {
+	out := make([]net.IPAddr, 0, len(ips))
+	// Two passes keep this stable without pulling in sort.
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			out = append(out, ip)
+		}
+	}
+	for _, ip := range ips {
+		if ip.IP.To4() == nil {
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+
+func tlsDial(ctx context.Context, host, port string, cfg *tls.Config) (*tls.ConnectionState, error) {
+	d := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	state := conn.ConnectionState()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil, fmt.Errorf("dialer did not return a *tls.Conn")
+	}
+	state := tlsConn.ConnectionState()
 	return &state, nil
 }
 
