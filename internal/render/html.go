@@ -763,7 +763,13 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
     border-bottom: 1px solid var(--rule);
     padding-top: 6px; padding-bottom: 6px;
   }
-  .t-list-row:hover { background: color-mix(in oklab, var(--panel), transparent 30%); }
+  .t-list-row:hover,
+  .t-list-row.active {
+    background: color-mix(in oklab, var(--panel), transparent 30%);
+  }
+  .t-list-row.active {
+    box-shadow: inset 2px 0 0 var(--prompt);
+  }
   .t-list-row .marker { color: var(--muted); user-select: none; }
   .t-list-row[data-s="valid"]         .marker { color: var(--ok); }
   .t-list-row[data-s="expiring_soon"] .marker { color: var(--warn); }
@@ -798,7 +804,52 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
   .t-list-foot {
     color: var(--muted); border-top: 1px solid var(--rule);
     padding-top: 6px; padding-bottom: 6px;
-    grid-template-columns: 1fr auto;
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+    justify-content: space-between; align-items: baseline;
+  }
+  .t-keys { font-size: 11px; }
+  .t-keys kbd {
+    display: inline-block; padding: 0 5px;
+    background: color-mix(in oklab, var(--panel), var(--fg) 6%);
+    border: 1px solid var(--rule); border-radius: 3px;
+    font-family: inherit; font-size: 10px; color: var(--fg);
+    margin: 0 1px; line-height: 1.4;
+  }
+  .t-help {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in oklab, var(--bg), transparent 15%);
+    padding: 16px;
+  }
+  .t-help-panel {
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 20px 24px;
+    max-width: 460px;
+    width: 100%;
+    box-shadow: 0 10px 40px color-mix(in oklab, #000, transparent 50%);
+  }
+  .t-help-panel h3 {
+    margin: 0 0 14px;
+    color: var(--prompt); font-weight: 700; font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+  .t-help-panel dl {
+    margin: 0; display: grid; grid-template-columns: minmax(90px, auto) 1fr;
+    gap: 6px 18px; font-size: 12px;
+  }
+  .t-help-panel dt { color: var(--fg); white-space: nowrap; }
+  .t-help-panel dd { margin: 0; color: var(--muted); }
+  .t-help-panel kbd {
+    display: inline-block; padding: 0 5px;
+    background: color-mix(in oklab, var(--panel), var(--fg) 6%);
+    border: 1px solid var(--rule); border-radius: 3px;
+    font-family: inherit; font-size: 11px; color: var(--fg);
+    margin: 0 1px; line-height: 1.4;
+  }
+  .t-help-panel .close-hint {
+    margin: 16px 0 0; color: var(--muted); font-size: 11px; text-align: center;
   }
   .t-cursor { margin-top: 14px; }
   .t-cursor .blink {
@@ -878,13 +929,36 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
       {{end}}
       <div class="t-list-foot">
         <span id="count">{{.Total}} rows · sorted by days asc</span>
-        <span>filter: everything shown</span>
+        <span class="t-keys">
+          <kbd>j</kbd>/<kbd>k</kbd> nav ·
+          <kbd>g</kbd>/<kbd>G</kbd> ends ·
+          <kbd>1</kbd>–<kbd>5</kbd> toggle ·
+          <kbd>/</kbd> find ·
+          <kbd>r</kbd> reset ·
+          <kbd>?</kbd> help
+        </span>
       </div>
     </div>
     <pre class="bot">└────────────────────────────────────────────────────────────────────────────┘</pre>
   </div>
 
   <div class="t-cursor"><span class="p-user">checkssl</span> <span>❯</span><span class="blink"></span></div>
+
+  <div class="t-help" id="help" role="dialog" aria-modal="true" aria-labelledby="help-title" hidden>
+    <div class="t-help-panel">
+      <h3 id="help-title">Keyboard shortcuts</h3>
+      <dl>
+        <dt><kbd>j</kbd> / <kbd>k</kbd></dt>  <dd>next / previous host</dd>
+        <dt><kbd>g</kbd> / <kbd>G</kbd></dt>  <dd>first / last host</dd>
+        <dt><kbd>1</kbd>–<kbd>5</kbd></dt>    <dd>toggle valid · warn · expired · invalid · down</dd>
+        <dt><kbd>/</kbd></dt>                 <dd>focus filter box</dd>
+        <dt><kbd>r</kbd></dt>                 <dd>reset filter &amp; chips</dd>
+        <dt><kbd>Esc</kbd></dt>               <dd>close help · clear filter</dd>
+        <dt><kbd>?</kbd></dt>                 <dd>show / hide this help</dd>
+      </dl>
+      <p class="close-hint">Click outside or press <kbd>Esc</kbd> to close.</p>
+    </div>
+  </div>
 </main>
 <script>
   (function () {
@@ -933,15 +1007,76 @@ const htmlTerminalTemplate = `<!DOCTYPE html>
       applyFilter();
     });
 
-    // Press "/" anywhere to focus the filter input, vim-style.
+    // --- keyboard navigation + help overlay ---
+    const help = document.getElementById("help");
+    let cursor = -1;
+
+    function visibleRows() { return rows.filter(r => !r.hidden); }
+
+    function moveCursor(delta, absolute) {
+      const vis = visibleRows();
+      if (vis.length === 0) { cursor = -1; return; }
+      if (absolute !== undefined) {
+        cursor = Math.max(0, Math.min(vis.length - 1, absolute));
+      } else {
+        cursor = (cursor < 0) ? (delta > 0 ? 0 : vis.length - 1)
+                              : Math.max(0, Math.min(vis.length - 1, cursor + delta));
+      }
+      rows.forEach(r => r.classList.remove("active"));
+      const row = vis[cursor];
+      row.classList.add("active");
+      row.scrollIntoView({ block: "nearest" });
+    }
+
+    // Clear cursor if the row it pointed at is now hidden.
+    const origApplyFilter = applyFilter;
+    applyFilter = function () {
+      const prev = cursor >= 0 ? visibleRows()[cursor] : null;
+      origApplyFilter();
+      if (prev && !prev.hidden) {
+        cursor = visibleRows().indexOf(prev);
+      } else if (cursor >= 0) {
+        cursor = -1;
+        rows.forEach(r => r.classList.remove("active"));
+      }
+    };
+
+    function toggleHelp(force) {
+      help.hidden = (typeof force === "boolean") ? !force : !help.hidden;
+    }
+    help.addEventListener("click", (e) => { if (e.target === help) toggleHelp(false); });
+
     document.addEventListener("keydown", (e) => {
-      if (e.key === "/" && e.target !== search) {
-        e.preventDefault();
-        search.focus();
-      } else if (e.key === "Escape" && e.target === search) {
-        search.value = "";
-        applyFilter();
-        search.blur();
+      // While typing in the filter: only "/" and Esc do anything.
+      if (e.target === search) {
+        if (e.key === "Escape") {
+          search.value = "";
+          applyFilter();
+          search.blur();
+        }
+        return;
+      }
+      // While the help overlay is open: Esc and ? close it; everything else is swallowed.
+      if (!help.hidden) {
+        if (e.key === "Escape" || e.key === "?") { e.preventDefault(); toggleHelp(false); }
+        return;
+      }
+      // Ignore shortcuts that collide with the browser (Cmd/Ctrl held).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      switch (e.key) {
+        case "/": e.preventDefault(); search.focus(); break;
+        case "?": e.preventDefault(); toggleHelp(true); break;
+        case "j": e.preventDefault(); moveCursor(+1); break;
+        case "k": e.preventDefault(); moveCursor(-1); break;
+        case "g": e.preventDefault(); moveCursor(0, 0); break;
+        case "G": e.preventDefault(); moveCursor(0, 999999); break;
+        case "r": e.preventDefault(); reset.click(); break;
+        case "1": case "2": case "3": case "4": case "5":
+          e.preventDefault();
+          const idx = parseInt(e.key, 10) - 1;
+          if (idx < chips.length) chips[idx].click();
+          break;
       }
     });
 
