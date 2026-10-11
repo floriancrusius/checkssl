@@ -52,7 +52,7 @@ func (m model) renderBody() string {
 
 	// --- Footer hint
 	hint := m.st.hint.Render(
-		"j/k nav · g/G ends · s/S sort · 1-5 toggle · / filter · r reload · ? help · q quit",
+		"j/k nav · g/G ends · s/S sort · d dir · 1-5 toggle · / filter · r reload · ? help · q quit",
 	)
 
 	main := strings.Join([]string{
@@ -194,7 +194,8 @@ func (m model) renderTable(contentWidth, maxRows int) (header, body string, visi
 		}
 		headerCells[i] = cellStyle.Render(padCell(trimmed, widths[i], i == 3 || (!m.opts.ShowIP && i == 2)))
 	}
-	header = strings.Join(headerCells, " ")
+	// Prefix with the same gutter width used by rows, so the columns line up.
+	header = "  " + strings.Join(headerCells, " ")
 
 	// Rows window
 	start, end := scrollWindow(m.cursor, len(m.rows), maxRows)
@@ -202,8 +203,13 @@ func (m model) renderTable(contentWidth, maxRows int) (header, body string, visi
 	for i := start; i < end; i++ {
 		r := m.rows[i]
 		line := m.renderRow(r, widths)
+		// Prepend a two-char gutter: a bright accent arrow on the selected
+		// row, two spaces otherwise. Separate from the row's own ANSI so
+		// per-cell colouring survives.
 		if i == m.cursor {
-			line = m.st.tableSel.Render(line)
+			line = m.st.tableSelMark.Render("▸ ") + line
+		} else {
+			line = "  " + line
 		}
 		bodyLines = append(bodyLines, line)
 	}
@@ -290,6 +296,7 @@ func (m model) renderHelpOverlay() string {
 		{"g / G", "first / last host"},
 		{"ctrl+d / ctrl+u", "scroll ten rows"},
 		{"s / S", "cycle sort column forward / backward"},
+		{"d", "toggle sort direction (asc ↔ desc)"},
 		{"1 … 5", "toggle valid · expiring · expired · invalid · error"},
 		{"/", "filter (any cell, case-insensitive)"},
 		{"r", "re-scan from scratch"},

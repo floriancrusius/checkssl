@@ -203,10 +203,11 @@ type styles struct {
 	colErr   lipgloss.Style
 	colMuted lipgloss.Style
 
-	tableHead  lipgloss.Style
-	tableRow   lipgloss.Style
-	tableSel   lipgloss.Style
-	sortActive lipgloss.Style
+	tableHead    lipgloss.Style
+	tableRow     lipgloss.Style
+	tableSelMark lipgloss.Style
+	tableSelPad  lipgloss.Style
+	sortActive   lipgloss.Style
 
 	hint      lipgloss.Style
 	helpPanel lipgloss.Style
@@ -240,10 +241,11 @@ func newStyles() styles {
 		colErr:   lipgloss.NewStyle().Foreground(errc),
 		colMuted: lipgloss.NewStyle().Foreground(muted),
 
-		tableHead:  lipgloss.NewStyle().Foreground(muted).Underline(true),
-		tableRow:   lipgloss.NewStyle(),
-		tableSel:   lipgloss.NewStyle().Foreground(accent).Background(lipgloss.Color("#1a1d16")).Bold(true),
-		sortActive: lipgloss.NewStyle().Foreground(accent).Bold(true),
+		tableHead:    lipgloss.NewStyle().Foreground(muted).Underline(true),
+		tableRow:     lipgloss.NewStyle(),
+		tableSelMark: lipgloss.NewStyle().Foreground(accent).Bold(true),
+		tableSelPad:  lipgloss.NewStyle().Foreground(muted),
+		sortActive:   lipgloss.NewStyle().Foreground(accent).Bold(true),
 
 		hint:         lipgloss.NewStyle().Foreground(muted),
 		helpPanel:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(muted).Padding(1, 2),
@@ -364,11 +366,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.reload()
 	case "s":
 		m.sort = (m.sort + 1) % 5
-		m.sortDesc = false
 		m.rebuildRows()
 	case "S":
 		m.sort = (m.sort + 4) % 5 // -1 mod 5
-		m.sortDesc = false
+		m.rebuildRows()
+	case "d":
+		m.sortDesc = !m.sortDesc
 		m.rebuildRows()
 	case "?":
 		m.mode = modeHelp

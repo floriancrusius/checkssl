@@ -87,23 +87,62 @@ func TestFilter_ChipToggleHides(t *testing.T) {
 	}
 }
 
-func TestSort_SCyclesColumn(t *testing.T) {
+func TestSort_SCyclesColumnKeepsDirection(t *testing.T) {
 	m := seedResults(initialModel(Options{}))
 	// Initial: days ascending.
 	if m.sort != sortByDays {
 		t.Fatalf("initial sort = %v, want days", m.sort)
 	}
+	// Flip to descending while on days.
+	m = pressKey(m, "d")
+	if !m.sortDesc {
+		t.Fatal("after d expected sortDesc=true")
+	}
+	// Cycle to the next column — descending must persist so the user can
+	// stay in 'newest first' mode across columns.
 	m = pressKey(m, "s")
 	if m.sort != sortByDomain {
 		t.Fatalf("after s sort = %v, want domain", m.sort)
 	}
+	if !m.sortDesc {
+		t.Fatal("after s expected sortDesc to persist (true)")
+	}
 	m = pressKey(m, "s")
 	if m.sort != sortByIP {
-		t.Fatalf("after 2x s sort = %v, want ip", m.sort)
+		t.Fatalf("after 2x s sort = %v", m.sort)
 	}
+	// Reverse cycle back to domain.
 	m = pressKey(m, "S")
 	if m.sort != sortByDomain {
-		t.Fatalf("after S sort = %v, want domain (reverse cycle)", m.sort)
+		t.Fatalf("after S sort = %v, want domain", m.sort)
+	}
+	// Toggle back to ascending.
+	m = pressKey(m, "d")
+	if m.sortDesc {
+		t.Fatal("after second d expected sortDesc=false")
+	}
+}
+
+func TestSort_DaysAscPutsLowestFirst(t *testing.T) {
+	m := seedResults(initialModel(Options{}))
+	// Initial state is days ascending — the expired cert (negative days)
+	// should land first, then the expiring-soon cert, then the valid one.
+	want := []string{"c.example", "b.example", "a.example"}
+	for i, d := range want {
+		if m.rows[i].Domain != d {
+			t.Errorf("row %d domain = %q, want %q", i, m.rows[i].Domain, d)
+		}
+	}
+}
+
+func TestSort_DaysDescReverses(t *testing.T) {
+	m := seedResults(initialModel(Options{}))
+	m = pressKey(m, "d") // toggle to descending while still on sortByDays
+	want := []string{"a.example", "b.example", "c.example"}
+	for i, d := range want {
+		if m.rows[i].Domain != d {
+			t.Errorf("row %d domain = %q, want %q (desc)", i, m.rows[i].Domain, d)
+		}
 	}
 }
 
