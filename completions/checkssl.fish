@@ -14,6 +14,7 @@ complete -c checkssl      -l nagios-critical -x -d 'Critical threshold in days (
 complete -c checkssl      -l only        -x -a 'valid expiring_soon expired invalid error' -d 'Only show rows matching one of these statuses'
 complete -c checkssl      -l show-ip        -d 'Include resolved IP in table/csv/json/html'
 complete -c checkssl      -l html-style  -x -a 'monitor terminal' -d 'HTML visual style'
+complete -c checkssl -s i -l tui             -d 'Launch the interactive terminal UI'
 complete -c checkssl -s h -l help              -d 'Show help'
 complete -c checkssl -s v -l version           -d 'Show version'
 

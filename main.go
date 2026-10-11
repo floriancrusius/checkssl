@@ -22,6 +22,7 @@ import (
 
 	"github.com/floriancrusius/checkssl/internal/cert"
 	"github.com/floriancrusius/checkssl/internal/render"
+	"github.com/floriancrusius/checkssl/internal/tui"
 )
 
 //go:embed completions/checkssl.bash
@@ -72,6 +73,7 @@ type cliOptions struct {
 	only           string
 	showIP         bool
 	htmlStyle      string
+	interactive    bool
 }
 
 // allowedOnlyStatuses lists the status values --only accepts.
@@ -192,6 +194,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		domains = []string{defaultDomain}
 	}
 
+	// --tui takes over — swap the one-shot report for the interactive view.
+	if opts.interactive {
+		if err := tui.Run(tui.Options{
+			Domains:     domains,
+			Timeout:     opts.timeout,
+			Concurrency: opts.concurrency,
+			ShowIP:      opts.showIP,
+		}); err != nil {
+			fmt.Fprintln(stderr, "tui error:", err)
+			return exitCodeError
+		}
+		return exitCodeSuccess
+	}
+
 	// Run TLS checks concurrently, preserving input order.
 	results := checkAll(context.Background(), domains, opts, addErr)
 	// Certificates come with UTC timestamps; render dates in the user's
@@ -305,6 +321,8 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.StringVar(&opts.only, "only", "", "comma-separated statuses to include (valid, expiring_soon, expired, invalid, error)")
 	fs.BoolVar(&opts.showIP, "show-ip", false, "include the resolved IP address in table/csv/json/html output")
 	fs.StringVar(&opts.htmlStyle, "html-style", render.HTMLStyleMonitor, "visual style for --format html: monitor or terminal")
+	fs.BoolVar(&opts.interactive, "tui", false, "launch the interactive terminal UI instead of printing a report")
+	fs.BoolVar(&opts.interactive, "i", false, "short for --tui")
 
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -332,6 +350,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "                             statuses: valid, expiring_soon, expired, invalid, error")
 	fmt.Fprintln(w, "      --show-ip              include the resolved IP in table/csv/json/html output")
 	fmt.Fprintln(w, "      --html-style <style>   HTML visual style: monitor (default) or terminal")
+	fmt.Fprintln(w, "  -i, --tui              launch the interactive terminal UI")
 	fmt.Fprintln(w, "  -h, --help              show this help")
 	fmt.Fprintln(w, "  -v, --version           show version")
 	fmt.Fprintln(w)

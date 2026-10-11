@@ -91,6 +91,7 @@ checkssl -f domains.txt --concurrency 200
 | `    --only <status,...>`     | only show rows with a matching status; exit 1 if any match, 0 otherwise |
 | `    --show-ip`               | add the resolved IP address as a column (table/csv/json/html) |
 | `    --html-style <style>`    | HTML visual style: `monitor` (default) or `terminal`         |
+| `-i, --tui`                   | launch the interactive terminal UI                           |
 | `-h, --help`                  | show help                                           |
 | `-v, --version`               | show version                                        |
 
@@ -99,7 +100,28 @@ checkssl -f domains.txt --concurrency 200
 - `checkssl completion {bash|zsh|fish}` — print a completion script suitable
   for `eval` or `source`.
 
-### Config file
+### Interactive terminal UI
+
+```
+checkssl -i                       # scan ~/.checkssl in a live TUI
+checkssl -i -f ~/.domains/prod.list --show-ip
+```
+
+Keybindings mirror the terminal HTML style:
+
+- `j` / `k` — next / previous row (also `↑` / `↓`, `ctrl+d` / `ctrl+u` jump ten)
+- `g` / `G` — first / last row
+- `s` / `S` — cycle sort column (days → domain → ip → status → issuer)
+- `1`–`5` — toggle valid / expiring / expired / invalid / error
+- `/` — focus the filter box (Enter apply, Esc cancel)
+- `r` — re-scan from scratch
+- `?` — help overlay
+- `q` / `Ctrl+C` — quit
+
+Rows appear as handshakes complete, so a slow or large list is immediately
+usable rather than making you wait for everything.
+
+## Config file
 
 When you pass neither `-d` nor `-f`, `checkssl` reads `~/.checkssl` — one
 domain per line, `#` starts a comment.
