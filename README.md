@@ -427,4 +427,4 @@ returns the same `Result` type `checkssl` uses.
 
 ## License
 
-ISC
+MIT — see [LICENSE](LICENSE).
