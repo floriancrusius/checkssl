@@ -227,6 +227,73 @@ func TestCfgMigrate_RealRunCopiesLegacy(t *testing.T) {
 	}
 }
 
+func TestCfgMigrate_RewritesLegacyIncludes(t *testing.T) {
+	// The user's real-world ~/.checkssl: comments + an @include that
+	// points at ~/.domains/*. After migration the primary must point
+	// at domains.d/*.list — otherwise deleting the legacy ~/.domains/
+	// leaves the migrated primary referencing nothing.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := t.TempDir()
+	t.Setenv("CHECKSSL_CONFIG_DIR", cfgDir)
+	legacy := "# header\ndirect.example\n@include ~/.domains/*\n@include ~/.domains/customer-a\n"
+	if err := os.WriteFile(filepath.Join(home, ".checkssl"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".domains"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".domains", "customer-a"),
+		[]byte("c-a.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errBuf bytes.Buffer
+	rc := runConfigCmd([]string{"migrate"}, strings.NewReader(""), &out, &errBuf)
+	if rc != exitCodeSuccess {
+		t.Fatalf("rc = %d, stderr = %q", rc, errBuf.String())
+	}
+	primary, _ := os.ReadFile(filepath.Join(cfgDir, "domains"))
+	got := string(primary)
+	want := "# header\ndirect.example\n@include domains.d/*.list\n@include domains.d/customer-a.list\n"
+	if got != want {
+		t.Errorf("primary after migrate:\n--- got ---\n%s--- want ---\n%s", got, want)
+	}
+	// Migrate output should flag the rewrites so the user sees them.
+	if !strings.Contains(out.String(), "rewrote @include") {
+		t.Errorf("migrate output didn't mention the include rewrite:\n%s", out.String())
+	}
+}
+
+func TestRewriteLegacyIncludes_TableDriven(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"glob star", "@include ~/.domains/*", "@include domains.d/*.list"},
+		{"glob bare", "@include ~/.domains/", "@include domains.d/*.list"},
+		{"concrete", "@include ~/.domains/customer-a", "@include domains.d/customer-a.list"},
+		{"with inline comment",
+			"@include ~/.domains/customer-a # my customer",
+			"@include domains.d/customer-a.list # my customer"},
+		{"trailing whitespace preserved on non-includes",
+			"direct.example   ",
+			"direct.example   "},
+		{"other include left alone",
+			"@include /etc/checkssl/extra.list",
+			"@include /etc/checkssl/extra.list"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := rewriteLegacyIncludes(tc.in)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCfgMigrate_NothingToDo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -327,10 +327,15 @@ func cfgMigrateCmd(args []string, stdout, stderr io.Writer) int {
 		return exitCodeError
 	}
 
-	// Primary file: ~/.checkssl → <cfgDir>/domains
+	// Primary file: ~/.checkssl → <cfgDir>/domains, with any
+	// `@include ~/.domains/...` directives rewritten to point at the
+	// new <cfgDir>/domains.d/ layout. Without the rewrite, the migrated
+	// primary keeps referencing the legacy path — once the user removes
+	// ~/.domains/ they end up with an active primary pointing to a dead
+	// directory, even though all the lists sit next to it in domains.d/.
 	if legacy.CheckSSLFile != "" {
 		dst := filepath.Join(cfgDir, "domains")
-		if err := copyWithLog(legacy.CheckSSLFile, dst, dryRun, stdout); err != nil {
+		if err := copyPrimaryWithRewrites(legacy.CheckSSLFile, dst, dryRun, stdout); err != nil {
 			fmt.Fprintln(stderr, "copy:", err)
 			return exitCodeError
 		}
@@ -390,6 +395,103 @@ func copyWithLog(src, dst string, dryRun bool, stdout io.Writer) error {
 	}
 	//nolint:gosec // dst is derived from ConfigDir().
 	return os.WriteFile(dst, data, 0o600)
+}
+
+// copyPrimaryWithRewrites copies the legacy ~/.checkssl to dst, but
+// rewrites `@include ~/.domains/...` directives so the migrated file
+// points at the new <cfgDir>/domains.d/ layout. Every rewrite is
+// reported so the user can see what changed.
+func copyPrimaryWithRewrites(src, dst string, dryRun bool, stdout io.Writer) error {
+	fmt.Fprintf(stdout, "  %s → %s\n", src, dst)
+	//nolint:gosec // src is from DetectLegacy.
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	rewritten, changes := rewriteLegacyIncludes(string(data))
+	for _, c := range changes {
+		fmt.Fprintf(stdout, "    rewrote @include: %s → %s\n", c.from, c.to)
+	}
+	if dryRun {
+		return nil
+	}
+	//nolint:gosec // dst is derived from ConfigDir().
+	return os.WriteFile(dst, []byte(rewritten), 0o600)
+}
+
+type includeRewrite struct{ from, to string }
+
+// rewriteLegacyIncludes finds `@include ~/.domains/...` lines in the
+// legacy primary file and rewrites them to point at the new
+// <cfgDir>/domains.d/ layout. The rewrite mirrors how cfgMigrateCmd
+// copies the include files themselves:
+//
+//   - `@include ~/.domains/*`      → `@include domains.d/*.list`
+//   - `@include ~/.domains/<name>` → `@include domains.d/<name>.list`
+//
+// Everything else (direct domains, comments, other includes) is
+// preserved verbatim. The returned changes list is purely informational
+// for the migrate log.
+func rewriteLegacyIncludes(content string) (string, []includeRewrite) {
+	const prefix = "@include "
+	var out strings.Builder
+	var changes []includeRewrite
+	lines := strings.Split(content, "\n")
+	for i, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, prefix) {
+			spec := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+			// Strip any inline `#` comment from the spec, as the parser
+			// does — otherwise we'd rewrite the whole trailing comment.
+			commentIdx := strings.Index(spec, "#")
+			tail := ""
+			if commentIdx >= 0 {
+				tail = " " + strings.TrimSpace(spec[commentIdx:])
+				spec = strings.TrimSpace(spec[:commentIdx])
+			}
+			if newSpec, ok := rewriteLegacyIncludeSpec(spec); ok {
+				changes = append(changes, includeRewrite{from: spec, to: newSpec})
+				out.WriteString(prefix + newSpec)
+				if tail != "" {
+					out.WriteString(tail)
+				}
+				if i < len(lines)-1 {
+					out.WriteString("\n")
+				}
+				continue
+			}
+		}
+		out.WriteString(raw)
+		if i < len(lines)-1 {
+			out.WriteString("\n")
+		}
+	}
+	return out.String(), changes
+}
+
+// rewriteLegacyIncludeSpec applies the ~/.domains/… → domains.d/…
+// mapping to a single @include spec. Returns ok=false for specs that
+// don't start with the legacy prefix (left untouched).
+func rewriteLegacyIncludeSpec(spec string) (string, bool) {
+	const legacyPrefix = "~/.domains/"
+	if !strings.HasPrefix(spec, legacyPrefix) {
+		return "", false
+	}
+	rest := spec[len(legacyPrefix):]
+	switch {
+	case rest == "" || rest == "*":
+		return "domains.d/*.list", true
+	case strings.ContainsAny(rest, "*?["):
+		// Preserve the user's glob shape but anchor it under domains.d/.
+		// A trailing `*` becomes `*.list` to mirror the per-file rename
+		// the migration performs (hermine.ai → hermine.ai.list).
+		if strings.HasSuffix(rest, "*") {
+			return "domains.d/" + rest + ".list", true
+		}
+		return "domains.d/" + rest, true
+	default:
+		return "domains.d/" + rest + ".list", true
+	}
 }
 
 // cfgGCCmd prunes old session backups.
