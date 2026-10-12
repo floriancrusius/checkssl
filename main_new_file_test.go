@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -50,6 +51,68 @@ func TestTargetFromEntries_NoProvenanceReturnsFalse(t *testing.T) {
 	entries := []config.Entry{{Domain: "example.com"}, {Domain: "other.net"}}
 	if _, _, ok := targetFromEntries(entries); ok {
 		t.Error("expected ok=false when no entry has provenance")
+	}
+}
+
+func TestTargetFromEntries_TopLevelConfigIgnored(t *testing.T) {
+	// Entries that live directly in ~/.checkssl (or domains.list) are
+	// indexes, not list files to drop neighbours next to. If those are
+	// the only entries with provenance, ok must be false so the caller
+	// routes to the legacy ~/.domains/ fallback instead of writing new
+	// files into the user's HOME directory.
+	entries := []config.Entry{
+		{Domain: "verena.de", File: "/Users/u/.checkssl", Line: 1},
+		{Domain: "api.verena.de", File: "/Users/u/.checkssl", Line: 2},
+	}
+	if _, _, ok := targetFromEntries(entries); ok {
+		t.Error("expected ok=false — entries from ~/.checkssl must not pin $HOME as N-target")
+	}
+}
+
+func TestTargetFromEntries_TopLevelMixedWithIncludeFile(t *testing.T) {
+	// A mix: direct entries in ~/.checkssl plus entries from one include
+	// file. The include-file dir wins; the top-level config vote drops.
+	entries := []config.Entry{
+		{Domain: "verena.de", File: "/Users/u/.checkssl", Line: 1},
+		{Domain: "a.example", File: "/Users/u/.domains/customer-a", Line: 1},
+		{Domain: "b.example", File: "/Users/u/.domains/customer-a", Line: 2},
+	}
+	dir, suf, ok := targetFromEntries(entries)
+	if !ok {
+		t.Fatal("expected ok=true (one include file present)")
+	}
+	if dir != "/Users/u/.domains" {
+		t.Errorf("dir = %q, want /Users/u/.domains", dir)
+	}
+	if suf != "" {
+		t.Errorf("suffix = %q, want empty", suf)
+	}
+}
+
+func TestResolveNewFileTarget_LegacyFallbackWhenNoIncludes(t *testing.T) {
+	// Simulate a user whose ~/.checkssl exists but has only direct
+	// entries (no @include matches). N must land in ~/.domains/, NOT
+	// in <cfgDir>/domains.d/ — otherwise the legacy ~/.checkssl never
+	// sees the new file.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CHECKSSL_CONFIG_DIR", filepath.Join(home, "cfgdir"))
+	// Create ~/.checkssl so DetectLegacy picks it up.
+	if err := os.WriteFile(filepath.Join(home, ".checkssl"), []byte("verena.de\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := settings.Defaults()
+	entries := []config.Entry{
+		{Domain: "verena.de", File: filepath.Join(home, ".checkssl"), Line: 1},
+	}
+	dir, suf := resolveNewFileTarget(cfg, entries)
+	wantDir := filepath.Join(home, ".domains")
+	if dir != wantDir {
+		t.Errorf("dir = %q, want %q (legacy fallback)", dir, wantDir)
+	}
+	if suf != "" {
+		t.Errorf("suffix = %q, want empty", suf)
 	}
 }
 

@@ -392,7 +392,21 @@ func resolveNewFileTarget(cfg settings.Settings, entries []config.Entry) (dir, s
 		return dir, suffix
 	}
 
-	// No entries yet — derive from the configured glob.
+	// Legacy user with no include files yet (just direct entries in
+	// ~/.checkssl, or an empty ~/.domains/*) — N must drop the new
+	// file into ~/.domains/ so the existing @include picks it up. If
+	// we fell through to the config-derived default, N would create
+	// the file in ~/Library/Application Support/checkssl/domains.d/,
+	// which the legacy ~/.checkssl doesn't know about.
+	legacy := paths.DetectLegacy()
+	if legacy.CheckSSLFile != "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, ".domains"), ""
+		}
+	}
+
+	// Fresh install (no legacy config) — derive from the configured glob.
 	if cfg.DomainsGlob != "" {
 		cfgDir, _ := paths.ConfigDir()
 		glob := cfg.DomainsGlob
@@ -407,7 +421,6 @@ func resolveNewFileTarget(cfg settings.Settings, entries []config.Entry) (dir, s
 		return dir, suffix
 	}
 
-	legacy := paths.DetectLegacy()
 	if legacy.DomainsDir != "" {
 		return legacy.DomainsDir, ""
 	}
@@ -424,16 +437,32 @@ var knownListSuffixes = map[string]bool{
 	".cfg":  true,
 }
 
+// topLevelConfigBasenames are the files that act as the user's
+// top-level config (listing other includes), not as list files to
+// drop new entries next to. Entries parsed directly from these do
+// not pin the N-target directory — otherwise `N` would want to drop
+// `lfcr.de` into `~/` (or into the OS config dir), neither of which
+// is where include files actually live.
+var topLevelConfigBasenames = map[string]bool{
+	".checkssl":    true, // legacy top-level config
+	"domains.list": true, // new-layout primary file (settings.DomainsFile default)
+}
+
 // targetFromEntries picks the dominant parent dir among the entries'
 // source files and, if the entries use a recognised list-file suffix,
-// returns that too. ok=false means no entry carries provenance (every
-// one came from -d, or the list is empty) — caller should fall back
-// to the config-derived default.
+// returns that too. Entries that came from a top-level config file
+// (see topLevelConfigBasenames) are ignored for the dir vote — those
+// files are indexes, not neighbours for new list files. ok=false means
+// no include-file entry carries usable provenance — caller should
+// fall back to the config/legacy default.
 func targetFromEntries(entries []config.Entry) (dir, suffix string, ok bool) {
 	dirCount := map[string]int{}
 	extCount := map[string]int{}
 	for _, e := range entries {
 		if e.File == "" {
+			continue
+		}
+		if topLevelConfigBasenames[filepath.Base(e.File)] {
 			continue
 		}
 		dirCount[filepath.Dir(e.File)]++
