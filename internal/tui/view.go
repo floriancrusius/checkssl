@@ -53,7 +53,7 @@ func (m model) renderBody() string {
 
 	// --- Footer hint
 	hint := m.st.hint.Render(
-		"j/k nav · l details · e edit · # comment · D delete · s/S sort · d dir · / filter · r reload · ? help · q quit",
+		"j/k nav · l details · e edit · # comment · D del · N new · , conf · / filter · r reload · ? help · q quit",
 	)
 
 	main := strings.Join([]string{
@@ -81,6 +81,8 @@ func (m model) renderBody() string {
 		return m.renderWithOverlay(main, m.renderDetailsOverlay())
 	case modeConfirmDelete:
 		return m.renderWithOverlay(main, m.renderConfirmDeleteOverlay())
+	case modeNewFile:
+		return m.renderWithOverlay(main, m.renderNewFileOverlay())
 	}
 	return main
 }
@@ -315,9 +317,11 @@ func (m model) renderHelpOverlay() string {
 		{"g / G", "first / last host"},
 		{"ctrl+d / ctrl+u", "scroll ten rows"},
 		{"l · enter", "details for the selected host (source file, issuer, error)"},
-		{"e", "open $EDITOR on the source file at the right line"},
+		{"e", "open the configured editor on the source file at the right line"},
 		{"#", "comment out the selected line (writes to the source file)"},
 		{"D", "delete the selected line from the source file (confirm with y)"},
+		{"N", "create a new include-list file and open it in the editor"},
+		{",", "open the checkssl config file in the editor"},
 		{"s / S", "cycle sort column forward / backward"},
 		{"d", "toggle sort direction (asc ↔ desc)"},
 		{"1 … 5", "toggle valid · expiring · expired · invalid · error"},
@@ -349,6 +353,19 @@ func (m model) renderHelpOverlay() string {
 // renderConfirmDeleteOverlay replaces the hint line with a yes/no
 // prompt naming the host and source file. `y` confirms, anything else
 // cancels. Kept on a single line so no modal panel is needed.
+// renderNewFileOverlay replaces the hint line with a filename prompt
+// for the modeNewFile input. Mirrors the filter prompt's styling.
+func (m model) renderNewFileOverlay() string {
+	prompt := m.st.filterPrompt.Render("new file:")
+	buf := m.st.filterInput.Render(m.newBuf + "▊")
+	suffix := ""
+	if m.opts.NewFileSuffix != "" && !strings.HasSuffix(m.newBuf, m.opts.NewFileSuffix) {
+		suffix = m.st.hint.Render(" (" + m.opts.NewFileSuffix + " will be appended)")
+	}
+	hint := m.st.hint.Render("  Enter=create  Esc=cancel")
+	return prompt + " " + buf + suffix + "   " + hint
+}
+
 func (m model) renderConfirmDeleteOverlay() string {
 	if m.cursor >= len(m.rows) {
 		return m.st.hint.Render("")
@@ -428,8 +445,8 @@ func displayPath(p string) string {
 }
 
 func (m model) renderWithOverlay(main, overlay string) string {
-	if m.mode == modeFilter || m.mode == modeConfirmDelete {
-		// Both prompts live on the last line (the hint); replace it.
+	if m.mode == modeFilter || m.mode == modeConfirmDelete || m.mode == modeNewFile {
+		// Hint-line prompts: filename, delete-confirm, filter.
 		lines := strings.Split(main, "\n")
 		if len(lines) > 0 {
 			lines[len(lines)-1] = overlay

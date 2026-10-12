@@ -135,9 +135,12 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	// Sub-commands come before flag parsing so `checkssl completion fish`
-	// works without competing with `-f`/`--file`.
+	// and `checkssl config ...` work without competing with `-f`/`--file`.
 	if len(args) > 0 && args[0] == "completion" {
 		return runCompletion(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "config" {
+		return runConfigCmd(args[1:], os.Stdin, stdout, stderr)
 	}
 
 	// Load settings early so flag defaults reflect what the user has
@@ -213,14 +216,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return fresh
 		}
 		backupRoot, _ := paths.BackupsDir()
+		newDir, newSuffix := resolveNewFileTarget(cfg)
 		if err := tui.Run(tui.Options{
-			Entries:     entries,
-			Timeout:     opts.timeout,
-			Concurrency: opts.concurrency,
-			ShowIP:      opts.showIP,
-			BackupRoot:  backupRoot,
-			EditorCmd:   cfg.EditorCmd,
-			Reload:      reparse,
+			Entries:       entries,
+			Timeout:       opts.timeout,
+			Concurrency:   opts.concurrency,
+			ShowIP:        opts.showIP,
+			BackupRoot:    backupRoot,
+			EditorCmd:     cfg.EditorCmd,
+			NewFileDir:    newDir,
+			NewFileSuffix: newSuffix,
+			ConfigPath:    cfgPath,
+			Reload:        reparse,
 		}); err != nil {
 			fmt.Fprintln(stderr, "tui error:", err)
 			return exitCodeError
@@ -359,6 +366,40 @@ func parseFlags(args []string, stderr io.Writer, cfg settings.Settings) (cliOpti
 		return opts, fmt.Errorf("--concurrency must be >= 1")
 	}
 	return opts, nil
+}
+
+// resolveNewFileTarget picks the directory where the TUI's `N` key
+// drops a newly created include file, and the filename suffix the user's
+// glob expects. Preference order:
+//
+//  1. The directory of the configured domains_glob (`domains.d/*.list`
+//     → `<cfgDir>/domains.d/`, suffix `.list`).
+//  2. Legacy `~/.domains/` with no suffix, for users who haven't
+//     migrated yet.
+//  3. Empty — the TUI disables `N` with a status-line note.
+func resolveNewFileTarget(cfg settings.Settings) (dir, suffix string) {
+	if cfg.DomainsGlob != "" {
+		cfgDir, _ := paths.ConfigDir()
+		glob := cfg.DomainsGlob
+		if !filepath.IsAbs(glob) && cfgDir != "" {
+			glob = filepath.Join(cfgDir, glob)
+		}
+		dir = filepath.Dir(glob)
+		// Extract a trailing `.ext` suffix from the glob pattern so a
+		// new file lands matching it (e.g. "*.list" → ".list"). Any
+		// base pattern without a dotted suffix (just "*") means "no
+		// suffix needed".
+		base := filepath.Base(glob)
+		if i := strings.LastIndex(base, "."); i > 0 && !strings.ContainsAny(base[i:], "*?[") {
+			suffix = base[i:]
+		}
+		return dir, suffix
+	}
+	legacy := paths.DetectLegacy()
+	if legacy.DomainsDir != "" {
+		return legacy.DomainsDir, ""
+	}
+	return "", ""
 }
 
 // loadDefaultSource reads the entries that the user has configured as

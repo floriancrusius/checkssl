@@ -97,8 +97,10 @@ checkssl -f domains.txt --concurrency 200
 
 ### Sub-commands
 
-- `checkssl completion {bash|zsh|fish}` — print a completion script suitable
-  for `eval` or `source`.
+- `checkssl config {path|edit|show|init|migrate|gc}` — manage the user
+  config file and backup cache. See **Configuration** below.
+- `checkssl completion {bash|zsh|fish}` — print a completion script
+  suitable for `eval` or `source`.
 
 ### Interactive terminal UI
 
@@ -107,18 +109,27 @@ checkssl -i                       # scan ~/.checkssl in a live TUI
 checkssl -i -f ~/.domains/prod.list --show-ip
 ```
 
-Keybindings mirror the terminal HTML style:
+Keybindings:
 
+**Navigation**
 - `j` / `k` — next / previous row (also `↑` / `↓`, `ctrl+d` / `ctrl+u` jump ten)
 - `g` / `G` — first / last row
 - `l` / `Enter` — details panel (full source path:line, issuer, SANs, error)
-- `e` — open `$EDITOR` on the source file at the right line
-- `#` — comment out the selected line in its source file
-- `D` — delete the selected line from its source file (needs `y` to confirm)
+
+**Edit the source**
+- `e` — open the configured editor on the source file at the right line
+- `#` — comment out the selected line
+- `D` — delete the selected line (needs `y` to confirm)
+- `N` — create a new include-list file and open it in the editor
+- `,` — open `config.toml` in the editor
+
+**Filter / sort**
 - `s` / `S` — cycle sort column (days → domain → ip → status → issuer)
 - `d` — toggle sort direction (asc ↔ desc)
 - `1`–`5` — toggle valid / expiring / expired / invalid / error
 - `/` — focus the filter box (Enter apply, Esc cancel)
+
+**Session**
 - `r` — re-scan from scratch
 - `?` — help overlay
 - `q` / `Ctrl+C` — quit
@@ -129,51 +140,144 @@ usable rather than making you wait for everything.
 **File handling.** The TUI tracks each domain's source file and line
 and watches those files for external edits (vim save, VSCode, etc.) via
 `fsnotify` — any change triggers an automatic re-scan after a short
-debounce. Pressing `#` or `D` writes directly to the source file; on
-the first mutation of each file the original is snapshotted next to it
-as `<file>.checkssl-<timestamp>.bak`, so an accidental delete is one
-`cp` away from being undone. Domains added via `-d` or the hardcoded
-default have no source and are skipped by the edit keys with an
-explanatory status-line note.
+debounce. In-TUI mutations (`#`, `D`) write directly to the source
+file; the first mutation per session snapshots the original into
+`<cache dir>/backups/<session timestamp>/`, so an accidental delete is
+one `cp` away from being undone (`checkssl config gc` prunes old
+snapshots). Domains added via `-d` or the hardcoded default have no
+source and are skipped by the edit keys with an explanatory status-line
+note.
 
-## Config file
+## Configuration
 
-When you pass neither `-d` nor `-f`, `checkssl` reads `~/.checkssl` — one
-domain per line, `#` starts a comment.
+`checkssl` keeps its files in the OS-native user config directory:
+
+| OS | Config dir | Cache dir |
+|---|---|---|
+| Linux | `~/.config/checkssl/` | `~/.cache/checkssl/` |
+| macOS | `~/Library/Application Support/checkssl/` | `~/Library/Caches/checkssl/` |
+| Windows | `%AppData%\checkssl\` | `%LocalAppData%\checkssl\` |
+
+Override via `$CHECKSSL_CONFIG_DIR` / `$CHECKSSL_CACHE_DIR` (useful for
+tests or running two instances side by side).
 
 ```
-# production
-api.example.com
-www.example.com
+<config dir>/
+├── config.toml      # defaults — scan behaviour, editor, TUI
+├── domains          # primary domain list (one per line, `#` comments)
+└── domains.d/       # per-group lists matched by domains_glob
+    ├── customer-a.list
+    └── production.list
+```
 
-# staging
+### Getting started
+
+Create the layout with a single command:
+
+```
+$ checkssl config init                # interactive — pick your editor
+$ checkssl config init --editor code  # non-interactive, pin VSCode
+```
+
+Then edit:
+
+```
+$ checkssl config edit                # opens config.toml in your editor
+$ checkssl config path                # prints the config dir (handy in scripts)
+$ checkssl config show                # all effective values + where each came from
+```
+
+### Config file (`config.toml`)
+
+Every key is optional. Precedence: **CLI flag > `CHECKSSL_*` env var > `config.toml` > hardcoded default**.
+
+```toml
+# ~/.config/checkssl/config.toml
+
+timeout = "5s"              # per-handshake timeout
+concurrency = 100           # max parallel handshakes
+format = "table"            # table | csv | json | html | nagios
+show_ip = false             # add the resolved-IP column
+
+domains_file = "domains"            # primary list, relative to config dir
+domains_glob = "domains.d/*.list"   # include glob, relative to config dir
+fallback_domain = "google.com"      # scanned when nothing else is configured
+
+[html]
+style = "monitor"           # monitor (dashboard) | terminal (phosphor mock)
+
+[nagios]
+warning_days = 30
+critical_days = 14
+
+[tui]
+sort = "days"               # days | domain | ip | status | issuer
+sort_desc = false
+hot_reload = true           # fsnotify-driven re-scan on config edits
+backup_retention = "720h"   # 30 days — see `checkssl config gc`
+
+[editor]
+# {file} / {line} get substituted. Empty = fall back to $VISUAL / $EDITOR.
+# Common presets:
+#   vim/nvim:    cmd = "nvim +{line} {file}"
+#   VSCode:      cmd = "code --wait --goto {file}:{line}"
+#   Sublime:     cmd = "subl --wait {file}:{line}"
+#   Zed:         cmd = "zed --wait {file}:{line}"
+#   Helix:       cmd = "hx {file}:{line}"
+cmd = ""
+```
+
+### Environment variables
+
+Every setting has an equivalent env var named `CHECKSSL_<KEY>` in SCREAMING_SNAKE_CASE
+(dotted keys use `_`, e.g. `nagios.warning_days` → `CHECKSSL_NAGIOS_WARNING_DAYS`).
+Great for CI and Docker:
+
+```
+CHECKSSL_TIMEOUT=10s CHECKSSL_FORMAT=json checkssl > report.json
+```
+
+### Domain list format
+
+One domain per line. `#` starts a comment (whole-line or end-of-line).
+Lines starting with `@include <path>` pull in another file, or a glob
+of files. Paths may be absolute, start with `~/` (home-expanded), or
+resolve relative to the including file. Glob patterns (`*`, `?`,
+`[…]`) are matched and visited in sorted order; directories are
+silently skipped; include cycles are detected and reported.
+
+```
+# ~/.config/checkssl/domains
+@include domains.d/*.list
+
+# extra domains that don't live in a group file yet
 staging.example.com     # rotated 2026-08
 ```
 
-### Include directive
+### Legacy ~/.checkssl + ~/.domains/
 
-Lines starting with `@include <path>` pull in another file, or a glob of
-files. Paths may be absolute, start with `~/` (home-expanded), or resolve
-relative to the including file. Glob patterns (`*`, `?`, `[…]`) are
-matched and visited in sorted order; directories are silently skipped;
-include cycles are detected and reported.
+If you upgraded from a pre-v2 install, `checkssl` still reads
+`~/.checkssl` and `~/.domains/*` as a fallback and prints a one-shot
+hint on stderr. Move everything to the new location at your own pace:
 
 ```
-# ~/.checkssl
-@include ~/.domains/*.list
-
-# extra domains that don't live in a group file yet
-staging.example.com
+$ checkssl config migrate --dry-run    # preview
+$ checkssl config migrate              # copy; originals are kept
+$ rm ~/.checkssl ~/.domains/*.bak      # when you're confident
 ```
 
-Handy for splitting a big list by customer, project, or environment:
+### Backups and `config gc`
+
+Every in-TUI mutation (`#`, `D`) snapshots the file before writing.
+Snapshots live under `<cache dir>/backups/<session timestamp>/` — never
+next to the original — so no `@include` glob picks them up.
+
+Prune old snapshots with:
 
 ```
-~/.domains/
-├── customer-a.list
-├── customer-b.list
-├── production.list
-└── staging.list
+$ checkssl config gc                          # honours tui.backup_retention
+$ checkssl config gc --older-than 7           # keep last 7 days
+$ checkssl config gc --older-than 168h        # same, in Go duration syntax
 ```
 
 ## Output formats

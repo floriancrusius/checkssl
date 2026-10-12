@@ -1,4 +1,4 @@
-.TH CHECKSSL 1 "September 2026" "checkssl" "User Commands"
+.TH CHECKSSL 1 "October 2026" "checkssl" "User Commands"
 .SH NAME
 checkssl \- inspect TLS certificates for one or more domains
 .SH SYNOPSIS
@@ -7,6 +7,10 @@ checkssl \- inspect TLS certificates for one or more domains
 .br
 .B checkssl completion
 .RI { bash | zsh | fish }
+.br
+.B checkssl config
+.RI { path | edit | show | init | migrate | gc }
+.RI [ flags ]
 .SH DESCRIPTION
 .B checkssl
 opens a TLS connection to each listed domain, retrieves the peer
@@ -110,17 +114,21 @@ navigate,
 .BR g / G
 jump to first/last,
 .BR l / Enter
-details panel for the selected row,
-.BR e
-open
-.B $EDITOR
-on the source file at the right line,
+details panel,
+.B e
+open the configured editor on the source file at the right line,
 .B #
 comment out the selected line,
 .B D
 delete the selected line (needs
 .B y
 to confirm),
+.B N
+create a new include-list file and open it in the editor,
+.B ,
+open
+.IR config.toml
+in the editor,
 .BR s / S
 cycle sort column,
 .B d
@@ -139,16 +147,54 @@ quit.
 External edits to the watched config files (vim, VSCode, …) trigger
 an automatic re-scan via
 .BR fsnotify (3).
-On the first in-TUI mutation of a file, the original is snapshotted
-to
-.IR <file>.checkssl-<timestamp>.bak
-in the same directory.
+In-TUI mutations snapshot the file into
+.I <cache dir>/backups/<session timestamp>/
+before writing.
+.BR "checkssl config gc"
+prunes old snapshots.
 .TP
 .BR \-h ", " \-\-help
 Print help.
 .TP
 .BR \-v ", " \-\-version
 Print version.
+.SH "CONFIGURATION"
+.B checkssl
+keeps its files in the OS-native user config directory:
+.IR ~/.config/checkssl/
+on Linux,
+.IR "~/Library/Application Support/checkssl/"
+on macOS,
+.IR %AppData%\\\\checkssl\\
+on Windows. The environment variables
+.B CHECKSSL_CONFIG_DIR
+and
+.B CHECKSSL_CACHE_DIR
+override those locations.
+.PP
+Layout:
+.PP
+.RS
+.EX
+<config dir>/
+  config.toml       # defaults — see `checkssl config edit`
+  domains           # primary domain list
+  domains.d/        # include-globbed group files
+.EE
+.RE
+.PP
+Every setting also has an environment-variable equivalent of the form
+.BR CHECKSSL_ <KEY>
+(dotted keys use
+.BR _ ,
+e.g.
+.B nagios.warning_days
+→
+.BR CHECKSSL_NAGIOS_WARNING_DAYS ).
+Precedence from highest to lowest is: CLI flag, env var, config file,
+hardcoded default. See
+.B checkssl config show
+to inspect the effective values and their sources.
 .SH "DEFAULT DOMAIN LIST"
 When neither
 .B \-d
@@ -156,12 +202,31 @@ nor
 .B \-f
 is given,
 .B checkssl
-reads
-.I ~/.checkssl
-if it exists (one domain per line,
+reads the files pointed to by
+.B domains_file
+and
+.B domains_glob
+in
+.IR config.toml
+(defaults
+.I domains
+and
+.IR domains.d/*.list ,
+both relative to the config dir). Lines beginning with
 .RB \(oq # \(cq
-starts a comment). If that file is absent, a single default domain is
-checked.
+and blank lines are ignored;
+.RB \(oq # \(cq
+also starts an end-of-line comment.
+.PP
+As a soft migration aid,
+.B checkssl
+still reads the legacy
+.I ~/.checkssl
+and
+.I ~/.domains/*
+if the new location is empty, and prints a one-shot hint on stderr
+pointing at
+.BR "checkssl config migrate" .
 .PP
 Lines of the form
 .BI "@include " path
@@ -269,18 +334,108 @@ field carries the reason.
 .TP
 .B error
 No certificate obtained: connection refused, timeout, DNS failure.
+.SH "CONFIG SUBCOMMANDS"
+.TP
+.B checkssl config path
+Print the resolved config dir and exit. Useful in shell scripts
+.RI ( cd\  $(checkssl config path) ).
+.TP
+.B checkssl config edit
+Open the config file in the configured editor. Creates the file (and
+its parent dir) from the shipped template if it doesn't exist yet.
+.TP
+.B checkssl config show
+Print the effective config with per-key provenance so you can see
+whether a value came from the default, the file, the env, or the CLI.
+.TP
+.BR "checkssl config init " [ "\-\-editor " \fIname\fR ] " [\-\-non-interactive] [\-\-force]"
+Create the config dir, drop a well-commented
+.I config.toml
+in it, and set up an empty
+.I domains
+file plus a
+.I domains.d/
+dir. With
+.B --editor
+pins a preset
+.RI ( code ", " nvim ", " nano ", " subl ", " zed ", " hx ", …)"
+or a raw template string. Without
+.B --non-interactive
+and on a TTY, prompts for the editor interactively.
+.TP
+.BR "checkssl config migrate " [ \-\-dry-run ]
+Copy legacy
+.I ~/.checkssl
+to
+.I <config dir>/domains
+and
+.I ~/.domains/*
+to
+.IR "<config dir>/domains.d/" .
+Originals are kept. With
+.B --dry-run
+(or
+.BR \-n ),
+only prints what would be copied.
+.TP
+.BR "checkssl config gc " [ \-\-older-than\  \fIage\fR ]
+Prune session backup folders older than the retention window. Default
+is
+.B tui.backup_retention
+from
+.IR config.toml .
+.I age
+may be a Go duration
+.RI ( 168h )
+or a plain integer meaning days
+.RI ( 7 ).
 .SH ENVIRONMENT
 .TP
 .B NO_COLOR
 When set to any non-empty value, disables ANSI colours in the
 .B table
 output.
+.TP
+.B CHECKSSL_CONFIG_DIR
+Overrides the OS-default config directory.
+.TP
+.B CHECKSSL_CACHE_DIR
+Overrides the OS-default cache directory (where backups land).
+.TP
+.BR CHECKSSL_ "<KEY>"
+Each setting listed by
+.B checkssl config show
+has an equivalent env var in SCREAMING_SNAKE_CASE. Examples:
+.BR CHECKSSL_TIMEOUT ,
+.BR CHECKSSL_CONCURRENCY ,
+.BR CHECKSSL_FORMAT ,
+.BR CHECKSSL_NAGIOS_WARNING_DAYS ,
+.BR CHECKSSL_EDITOR_CMD .
 .SH FILES
 .TP
-.I ~/.checkssl
-Default domain list, one domain per line;
+.I <config dir>/config.toml
+User defaults — scan behaviour, HTML style, Nagios thresholds, TUI
+options, editor template. See
+.B CONFIGURATION
+above.
+.TP
+.I <config dir>/domains
+Primary domain list, one domain per line;
 .RB \(oq # \(cq
 starts a comment.
+.TP
+.I <config dir>/domains.d/
+Per-group include files matched by
+.BR domains_glob .
+.TP
+.I <cache dir>/backups/<session>/
+Snapshots of files mutated in-TUI, one folder per session. Pruned by
+.BR "checkssl config gc" .
+.TP
+.I ~/.checkssl ", " ~/.domains/
+Legacy locations from pre-v2 installs. Still read as a fallback;
+.B checkssl config migrate
+moves them.
 .SH EXAMPLES
 .PP
 Check a single domain:

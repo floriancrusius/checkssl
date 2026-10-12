@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -321,6 +322,92 @@ func TestEdit_WithSourceReturnsCommand(t *testing.T) {
 	cmd := m.editSelected()
 	if cmd == nil {
 		t.Fatal("expected a cmd when selected row has a source")
+	}
+}
+
+func TestNewFile_PromptAndCreate(t *testing.T) {
+	// `N` enters modeNewFile; typing + Enter creates the file in
+	// NewFileDir with the configured suffix appended.
+	dir := t.TempDir()
+	m := seedResults(initialModel(Options{
+		NewFileDir:    dir,
+		NewFileSuffix: ".list",
+		// $EDITOR unlikely to exist, use a template that doesn't try
+		// to spawn — the Resolve test suite already covers template
+		// expansion; here we just need a cmd that doesn't crash.
+		EditorCmd: "/bin/true {file}",
+	}))
+	m = pressKey(m, "N")
+	if m.mode != modeNewFile {
+		t.Fatalf("after N mode = %v, want modeNewFile", m.mode)
+	}
+	for _, r := range "lfcr.de" {
+		m = pressKey(m, string(r))
+	}
+	if m.newBuf != "lfcr.de" {
+		t.Fatalf("newBuf = %q, want lfcr.de", m.newBuf)
+	}
+	// Hit Enter — the file must exist with the suffix.
+	enter := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	next, _ := m.Update(enter)
+	m = next.(model)
+	full := filepath.Join(dir, "lfcr.de.list")
+	data, err := os.ReadFile(full) //nolint:gosec // test file in tempdir
+	if err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+	if !strings.Contains(string(data), "lfcr.de") {
+		t.Errorf("header missing domain name: %q", data)
+	}
+}
+
+func TestNewFile_EmptyNameIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	m := seedResults(initialModel(Options{NewFileDir: dir, NewFileSuffix: ".list"}))
+	m = pressKey(m, "N")
+	// Enter with empty buffer.
+	enter := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	next, _ := m.Update(enter)
+	m = next.(model)
+	if m.mode != modeNormal {
+		t.Fatalf("after Enter mode = %v", m.mode)
+	}
+	// Nothing should have been created.
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Errorf("expected empty dir, got %d entries", len(entries))
+	}
+}
+
+func TestNewFile_EscCancels(t *testing.T) {
+	dir := t.TempDir()
+	m := seedResults(initialModel(Options{NewFileDir: dir, NewFileSuffix: ".list"}))
+	m = pressKey(m, "N")
+	for _, r := range "abc" {
+		m = pressKey(m, string(r))
+	}
+	esc := tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
+	next, _ := m.Update(esc)
+	m = next.(model)
+	if m.mode != modeNormal {
+		t.Errorf("after Esc mode = %v", m.mode)
+	}
+	if m.newBuf != "" {
+		t.Errorf("newBuf = %q after cancel", m.newBuf)
+	}
+}
+
+func TestNewFile_NoDirConfiguredReportsError(t *testing.T) {
+	m := seedResults(initialModel(Options{})) // NewFileDir empty
+	m = pressKey(m, "N")
+	for _, r := range "x" {
+		m = pressKey(m, string(r))
+	}
+	enter := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	next, _ := m.Update(enter)
+	m = next.(model)
+	if !strings.Contains(m.lastError, "no include-file directory") {
+		t.Errorf("expected explanatory lastError, got %q", m.lastError)
 	}
 }
 

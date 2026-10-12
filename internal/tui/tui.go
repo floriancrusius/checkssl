@@ -7,6 +7,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +37,16 @@ type Options struct {
 	// the placeholder semantics; empty falls through to
 	// $VISUAL / $EDITOR / vi.
 	EditorCmd string
+	// NewFileDir is where `N` (new include file) drops the newly
+	// created list. Empty disables the key with a status-line note.
+	NewFileDir string
+	// NewFileSuffix is appended to the user-typed basename when
+	// creating a new file via `N`. Typically ".list" to match the
+	// default domains.d/*.list glob. Empty = no suffix.
+	NewFileSuffix string
+	// ConfigPath is the full path to the active config.toml, so `,`
+	// can open it in the editor. Empty disables the key.
+	ConfigPath string
 	// Reload re-parses the user's original source (config file + -d args)
 	// and returns the fresh entry list. Called on every reload (manual
 	// `r`, post-edit, fsnotify) so edits that add or remove domains are
@@ -173,6 +185,9 @@ const (
 	modeHelp
 	modeDetails
 	modeConfirmDelete
+	// modeNewFile prompts for a basename, creates a new include-list
+	// file in the first glob dir, and opens the editor on it.
+	modeNewFile
 )
 
 type model struct {
@@ -199,6 +214,7 @@ type model struct {
 	height    int
 	lastError string         // transient status-line note (editor failures etc.)
 	writer    *config.Writer // session-scoped mutator; nil disables edit keys
+	newBuf    string         // input buffer for modeNewFile
 
 	// Styles
 	st styles
@@ -426,6 +442,35 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// New-file mode: like modeFilter, but Enter creates the file +
+	// launches the editor instead of applying a filter.
+	if m.mode == modeNewFile {
+		switch key {
+		case "esc":
+			m.mode = modeNormal
+			m.newBuf = ""
+		case "enter":
+			name := strings.TrimSpace(m.newBuf)
+			m.mode = modeNormal
+			m.newBuf = ""
+			if name == "" {
+				return m, nil
+			}
+			if cmd := m.createNewFile(name); cmd != nil {
+				return m, cmd
+			}
+		case "backspace":
+			if len(m.newBuf) > 0 {
+				m.newBuf = m.newBuf[:len(m.newBuf)-1]
+			}
+		default:
+			if len(key) == 1 {
+				m.newBuf += key
+			}
+		}
+		return m, nil
+	}
+
 	// Normal mode
 	switch key {
 	case "q", "ctrl+c":
@@ -448,6 +493,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "e":
 		if cmd := m.editSelected(); cmd != nil {
+			return m, cmd
+		}
+	case "N":
+		m.mode = modeNewFile
+		m.newBuf = ""
+	case ",":
+		if cmd := m.editConfig(); cmd != nil {
 			return m, cmd
 		}
 	case "#":
@@ -559,6 +611,75 @@ func (m *model) deleteSelected() tea.Cmd {
 	}
 	m.lastError = fmt.Sprintf("deleted %s from line %d", r.Domain, r.SourceLine)
 	return m.reload()
+}
+
+// createNewFile is the body of `N`. Builds the target path from
+// NewFileDir + sanitised basename + NewFileSuffix, writes a header
+// comment so the user doesn't land in an empty buffer, and launches
+// the configured editor at line 3 (past the header).
+func (m *model) createNewFile(name string) tea.Cmd {
+	if m.opts.NewFileDir == "" {
+		m.lastError = "N disabled: no include-file directory configured"
+		return nil
+	}
+	// Trim any leading/trailing path separators the user might type —
+	// we only ever create files directly inside NewFileDir.
+	name = strings.TrimSpace(name)
+	name = strings.Trim(name, "/\\")
+	if name == "" {
+		m.lastError = "N cancelled: empty filename"
+		return nil
+	}
+	if m.opts.NewFileSuffix != "" && !strings.HasSuffix(name, m.opts.NewFileSuffix) {
+		name += m.opts.NewFileSuffix
+	}
+	full := filepath.Join(m.opts.NewFileDir, name)
+
+	// Create dir if missing. Create file only if missing — if it
+	// already exists, just open it (no truncation).
+	if err := os.MkdirAll(m.opts.NewFileDir, 0o700); err != nil {
+		m.lastError = fmt.Sprintf("mkdir %s: %v", m.opts.NewFileDir, err)
+		return nil
+	}
+	header := fmt.Sprintf("# %s — add one domain per line, `#` starts a comment\n\n",
+		strings.TrimSuffix(name, m.opts.NewFileSuffix))
+	if _, err := os.Stat(full); os.IsNotExist(err) {
+		if err := os.WriteFile(full, []byte(header), 0o600); err != nil {
+			m.lastError = fmt.Sprintf("create %s: %v", full, err)
+			return nil
+		}
+	}
+
+	cmd, err := editor.Resolve(m.opts.EditorCmd, full, 3)
+	if err != nil {
+		m.lastError = fmt.Sprintf("editor: %v", err)
+		return nil
+	}
+	m.lastError = fmt.Sprintf("new file: %s", full)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorDoneMsg{err: err, file: full}
+	})
+}
+
+// editConfig opens the active config.toml in the configured editor.
+// Behaves like editSelected but for the single config path we were
+// handed at startup. Reload is still triggered on return so a changed
+// editor template takes effect immediately — well, from the next edit.
+func (m *model) editConfig() tea.Cmd {
+	if m.opts.ConfigPath == "" {
+		m.lastError = ", disabled: no config file path configured"
+		return nil
+	}
+	cmd, err := editor.Resolve(m.opts.EditorCmd, m.opts.ConfigPath, 1)
+	if err != nil {
+		m.lastError = fmt.Sprintf("editor: %v", err)
+		return nil
+	}
+	m.lastError = fmt.Sprintf("editing %s", m.opts.ConfigPath)
+	path := m.opts.ConfigPath
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorDoneMsg{err: err, file: path}
+	})
 }
 
 // editSelected opens the configured editor on the source file of the
