@@ -7,6 +7,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +68,12 @@ type (
 	scanDoneMsg struct {
 		generation int
 		elapsed    time.Duration
+	}
+	// editorDoneMsg lands after $EDITOR exits. On a clean exit we kick off
+	// a reload so edits are reflected immediately.
+	editorDoneMsg struct {
+		err  error
+		file string
 	}
 	tickMsg struct{}
 )
@@ -164,6 +172,7 @@ type model struct {
 	mode      mode
 	width     int
 	height    int
+	lastError string // transient status-line note (editor failures etc.)
 
 	// Styles
 	st styles
@@ -301,6 +310,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.elapsed = msg.elapsed
 		return m, nil
 
+	case editorDoneMsg:
+		// Re-scan on a clean editor exit so edits appear immediately.
+		// On error we just surface nothing and keep the current data.
+		if msg.err != nil {
+			m.lastError = fmt.Sprintf("editor: %v", msg.err)
+			return m, nil
+		}
+		return m, m.reload()
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -381,6 +399,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(m.rows) > 0 {
 			m.mode = modeDetails
 		}
+	case "e":
+		if cmd := m.editSelected(); cmd != nil {
+			return m, cmd
+		}
 	case "/":
 		m.mode = modeFilter
 		m.filterBuf = m.filter
@@ -428,6 +450,36 @@ func (m *model) moveCursor(delta int) {
 func (m *model) toggleChip(s cert.Status) {
 	m.chips[s] = !m.chips[s]
 	m.rebuildRows()
+}
+
+// editSelected opens $EDITOR on the source file of the currently-selected
+// row, jumping to its line. Returns nil (no command) when there is no
+// row selected or the row has no file provenance (e.g. a -d command-line
+// domain). Falls back to `vi` when $EDITOR is unset.
+func (m *model) editSelected() tea.Cmd {
+	if m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	if r.Source == "" || r.SourceLine == 0 {
+		m.lastError = "no source file for this row (added via -d or built-in default)"
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	// `+<line>` is the near-universal convention understood by vi, vim,
+	// nvim, nano, and most emacs frontends. VSCode's `code` wants
+	// `--goto file:line` instead — users of code set $EDITOR to a
+	// wrapper that translates, we don't try to detect it here.
+	//nolint:gosec // editor+file paths come from user config; invoking them is the whole point.
+	cmd := exec.Command(editor, fmt.Sprintf("+%d", r.SourceLine), r.Source)
+	m.lastError = ""
+	src := r.Source
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorDoneMsg{err: err, file: src}
+	})
 }
 
 func (m *model) reload() tea.Cmd {

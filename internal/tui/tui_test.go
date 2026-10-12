@@ -172,6 +172,40 @@ func TestFilterMode_SlashOpensAndEscCancels(t *testing.T) {
 	}
 }
 
+func TestEdit_NoSourceReportsError(t *testing.T) {
+	// Rows without a source file (e.g. a -d command-line domain) should
+	// not try to launch an editor — instead the status line reports why.
+	m := seedResults(initialModel(Options{}))
+	// seedResults leaves Source/SourceLine as zero values, which is
+	// exactly the no-source case we want.
+	cmd := m.editSelected()
+	if cmd != nil {
+		t.Fatal("expected no cmd when selected row has no source")
+	}
+	if m.lastError == "" {
+		t.Fatal("expected lastError to be set when editing a sourceless row")
+	}
+}
+
+func TestEdit_WithSourceReturnsCommand(t *testing.T) {
+	m := seedResults(initialModel(Options{}))
+	// Tag every result so wherever the cursor lands post-sort has
+	// provenance.
+	for i := range m.results {
+		m.results[i].Source = "/tmp/some-config"
+		m.results[i].SourceLine = 7
+	}
+	m.rebuildRows()
+	m.cursor = 0
+	// Guarantee $EDITOR is set to something harmless so we don't fall
+	// back to vi, which may or may not be installed in CI.
+	t.Setenv("EDITOR", "/bin/true")
+	cmd := m.editSelected()
+	if cmd == nil {
+		t.Fatal("expected a cmd when selected row has a source")
+	}
+}
+
 func TestDetailsMode_LOpensEscCloses(t *testing.T) {
 	m := seedResults(initialModel(Options{}))
 	m = pressKey(m, "l")

@@ -53,7 +53,7 @@ func (m model) renderBody() string {
 
 	// --- Footer hint
 	hint := m.st.hint.Render(
-		"j/k nav · g/G ends · l details · s/S sort · d dir · 1-5 toggle · / filter · r reload · ? help · q quit",
+		"j/k nav · g/G ends · l details · e edit · s/S sort · d dir · 1-5 toggle · / filter · r reload · ? help · q quit",
 	)
 
 	main := strings.Join([]string{
@@ -274,7 +274,11 @@ func (m model) renderStatusLine(visible int) string {
 		parts = append(parts, "filter: "+m.filter)
 	}
 	parts = append(parts, "sort: "+m.sort.String()+directionArrow(m.sortDesc))
-	return m.st.hint.Render(strings.Join(parts, "   "))
+	line := m.st.hint.Render(strings.Join(parts, "   "))
+	if m.lastError != "" {
+		line += "   " + m.st.colCrit.Render("⚠ "+m.lastError)
+	}
+	return line
 }
 
 func directionArrow(desc bool) string {
@@ -299,6 +303,7 @@ func (m model) renderHelpOverlay() string {
 		{"g / G", "first / last host"},
 		{"ctrl+d / ctrl+u", "scroll ten rows"},
 		{"l · enter", "details for the selected host (source file, issuer, error)"},
+		{"e", "open $EDITOR on the source file at the right line"},
 		{"s / S", "cycle sort column forward / backward"},
 		{"d", "toggle sort direction (asc ↔ desc)"},
 		{"1 … 5", "toggle valid · expiring · expired · invalid · error"},
