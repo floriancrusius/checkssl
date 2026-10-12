@@ -86,9 +86,21 @@ func (w *Writer) readLines(path string, line int) ([]string, error) {
 	return lines, nil
 }
 
-// ensureBackup copies path to <path>.checkssl-<timestamp>.bak the first
-// time it is called for path in this session. Subsequent calls are
-// no-ops so the backup always reflects the pre-session state.
+// backupSubdir is the hidden folder next to the modified file where
+// per-session snapshots land. A dotfile name keeps the folder out of
+// typical `~/.domains/*` globs; its contents are files, not configs,
+// and are silently skipped by the parser's `IsDir` check anyway.
+const backupSubdir = ".checkssl-backups"
+
+// ensureBackup copies path to <dir>/.checkssl-backups/<basename>.<ts>.bak
+// the first time it is called for path in this session. Subsequent
+// calls are no-ops so the backup always reflects the pre-session state.
+//
+// Backups MUST NOT land next to the original: a config file at
+// ~/.domains/foo and a glob of ~/.domains/* would otherwise re-read the
+// backup as another config, undoing the commented-out line. The
+// hidden subdir sidesteps that, and the parser skips directories
+// matched by a glob, so no change to the parser is needed.
 func (w *Writer) ensureBackup(path string) error {
 	if _, done := w.backedUp[path]; done {
 		return nil
@@ -98,7 +110,12 @@ func (w *Writer) ensureBackup(path string) error {
 	if err != nil {
 		return fmt.Errorf("read %s for backup: %w", path, err)
 	}
-	backup := fmt.Sprintf("%s.checkssl-%s.bak", path, w.timestamp)
+	dir := filepath.Join(filepath.Dir(path), backupSubdir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	base := filepath.Base(path)
+	backup := filepath.Join(dir, fmt.Sprintf("%s.%s.bak", base, w.timestamp))
 	//nolint:gosec // backup path is derived from a tracked config path.
 	if err := os.WriteFile(backup, data, 0o600); err != nil {
 		return fmt.Errorf("write backup %s: %w", backup, err)

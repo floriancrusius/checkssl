@@ -93,6 +93,17 @@ func readFileWithSeen(path string, addErr func(string), seen map[string]struct{}
 	return out
 }
 
+// isBackupFile reports whether the basename matches the pattern this
+// package writes backups under. A defensive filter so an @include glob
+// like `~/.domains/*` doesn't accidentally re-ingest a backup file
+// (which would undo the commented-out line it was supposed to snapshot).
+// Writer now puts new backups in a hidden subdir, but existing pollution
+// from older versions can still live next to the originals.
+func isBackupFile(name string) bool {
+	// Pattern: anything containing ".checkssl-" and ending in ".bak".
+	return strings.Contains(name, ".checkssl-") && strings.HasSuffix(name, ".bak")
+}
+
 // expandInclude resolves a single @include argument. Supports ~ prefix
 // and glob patterns (via filepath.Glob). Relative paths resolve against
 // baseDir.
@@ -125,6 +136,10 @@ func expandInclude(spec, baseDir string, addErr func(string), seen map[string]st
 			continue
 		}
 		if info.IsDir() {
+			continue
+		}
+		if isBackupFile(filepath.Base(m)) {
+			// Skip our own backup files — see isBackupFile for why.
 			continue
 		}
 		out = append(out, readFileWithSeen(m, addErr, seen)...)

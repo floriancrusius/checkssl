@@ -218,6 +218,27 @@ func TestExpandInclude_HomeTildeExpansion(t *testing.T) {
 	}
 }
 
+func TestExpandInclude_SkipsBackupFiles(t *testing.T) {
+	// Reproduce the bug the user hit: an @include glob matched
+	// backup files written by older checkssl versions, so a
+	// commented-out line was effectively resurrected from the backup.
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "real.txt"), "live.example\n")
+	writeFile(t, filepath.Join(dir, "real.txt.checkssl-20261012-144038.bak"),
+		"ghost.example\n")
+	// Nested .bak.bak that an older session produced should also be
+	// skipped — the pattern anchors on the suffix only, so no amount
+	// of chaining tricks it.
+	writeFile(t, filepath.Join(dir, "real.txt.checkssl-20261012-144038.bak.checkssl-20261012-150000.bak"),
+		"deeper-ghost.example\n")
+
+	entries := expandInclude(filepath.Join(dir, "*"), dir, func(string) {}, map[string]struct{}{})
+	got := domainsOf(entries)
+	if len(got) != 1 || got[0] != "live.example" {
+		t.Errorf("expandInclude pulled %v, want only [live.example]", got)
+	}
+}
+
 func TestDedupeFirst_KeepsFirstOccurrence(t *testing.T) {
 	in := []Entry{
 		{Domain: "a.example", File: "/first.txt", Line: 1},

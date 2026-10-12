@@ -68,6 +68,12 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 	if backup == "" {
 		t.Fatal("no backup recorded")
 	}
+	// Backup must land in the hidden sibling directory, NOT next to the
+	// original — otherwise a glob like `~/.domains/*` would re-ingest it.
+	wantDir := filepath.Join(dir, backupSubdir)
+	if filepath.Dir(backup) != wantDir {
+		t.Errorf("backup went to %q, want parent dir %q", backup, wantDir)
+	}
 	data, err := os.ReadFile(backup) //nolint:gosec // test file in tempdir
 	if err != nil {
 		t.Fatalf("backup unreadable: %v", err)
@@ -87,6 +93,26 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 	after, _ := os.ReadFile(backup) //nolint:gosec // test file in tempdir
 	if string(after) != "SENTINEL" {
 		t.Errorf("second write overwrote backup — got %q", after)
+	}
+}
+
+func TestWriter_BackupSubdirKeepsGlobClean(t *testing.T) {
+	// A full round-trip: write, then re-parse via a glob that would
+	// have matched the backup if it lived next to the original. The
+	// commented-out domain must stay commented-out — not resurrect
+	// from the backup.
+	dir := t.TempDir()
+	f := writeFile(t, filepath.Join(dir, "list.txt"), "a.example\nb.example\n")
+
+	w := NewWriter()
+	if err := w.CommentOutLine(f, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the user's ~/.checkssl @include ~/.domains/* glob.
+	entries := expandInclude(filepath.Join(dir, "*"), dir, func(string) {}, map[string]struct{}{})
+	domains := domainsOf(entries)
+	if len(domains) != 1 || domains[0] != "b.example" {
+		t.Errorf("expandInclude pulled %v, want only [b.example]", domains)
 	}
 }
 
