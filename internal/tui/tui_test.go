@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -169,6 +171,71 @@ func TestFilterMode_SlashOpensAndEscCancels(t *testing.T) {
 	}
 	if m.filter != "" {
 		t.Fatalf("after Esc filter = %q, want empty", m.filter)
+	}
+}
+
+func TestCommentOut_WritesHashAndReloads(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "d.txt")
+	if err := os.WriteFile(f, []byte("a.example\nb.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := seedResults(initialModel(Options{}))
+	// Point every row at line 1 of our temp file so wherever the cursor
+	// lands post-sort, the mutation hits a known line.
+	for i := range m.results {
+		m.results[i].Source = f
+		m.results[i].SourceLine = 1
+	}
+	m.rebuildRows()
+	m.cursor = 0
+	cmd := m.commentOutSelected()
+	if cmd == nil {
+		t.Fatal("expected a reload cmd")
+	}
+	got, _ := os.ReadFile(f) //nolint:gosec // test file in tempdir
+	if string(got) != "# a.example\nb.example\n" {
+		t.Errorf("file after comment = %q", got)
+	}
+}
+
+func TestDelete_RequiresConfirmThenWrites(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "d.txt")
+	if err := os.WriteFile(f, []byte("a.example\nb.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := seedResults(initialModel(Options{}))
+	for i := range m.results {
+		m.results[i].Source = f
+		m.results[i].SourceLine = 2 // target b.example
+	}
+	m.rebuildRows()
+	m.cursor = 0
+	// `D` only arms the modal — nothing on disk yet.
+	m = pressKey(m, "D")
+	if m.mode != modeConfirmDelete {
+		t.Fatalf("expected modeConfirmDelete, got %v", m.mode)
+	}
+	before, _ := os.ReadFile(f) //nolint:gosec // test file in tempdir
+	if string(before) != "a.example\nb.example\n" {
+		t.Errorf("file touched before confirm: %q", before)
+	}
+	// Cancel path first: any key other than y/Y just closes the modal.
+	m = pressKey(m, "n")
+	if m.mode != modeNormal {
+		t.Fatal("n should have cancelled the modal")
+	}
+	stillUntouched, _ := os.ReadFile(f) //nolint:gosec // test file in tempdir
+	if string(stillUntouched) != "a.example\nb.example\n" {
+		t.Errorf("file changed on cancel: %q", stillUntouched)
+	}
+	// Confirm path.
+	m = pressKey(m, "D")
+	m = pressKey(m, "y")
+	got, _ := os.ReadFile(f) //nolint:gosec // test file in tempdir
+	if string(got) != "a.example\n" {
+		t.Errorf("file after delete = %q, want 'a.example\\n'", got)
 	}
 }
 

@@ -111,7 +111,12 @@ Keybindings mirror the terminal HTML style:
 
 - `j` / `k` — next / previous row (also `↑` / `↓`, `ctrl+d` / `ctrl+u` jump ten)
 - `g` / `G` — first / last row
+- `l` / `Enter` — details panel (full source path:line, issuer, SANs, error)
+- `e` — open `$EDITOR` on the source file at the right line
+- `#` — comment out the selected line in its source file
+- `D` — delete the selected line from its source file (needs `y` to confirm)
 - `s` / `S` — cycle sort column (days → domain → ip → status → issuer)
+- `d` — toggle sort direction (asc ↔ desc)
 - `1`–`5` — toggle valid / expiring / expired / invalid / error
 - `/` — focus the filter box (Enter apply, Esc cancel)
 - `r` — re-scan from scratch
@@ -120,6 +125,16 @@ Keybindings mirror the terminal HTML style:
 
 Rows appear as handshakes complete, so a slow or large list is immediately
 usable rather than making you wait for everything.
+
+**File handling.** The TUI tracks each domain's source file and line
+and watches those files for external edits (vim save, VSCode, etc.) via
+`fsnotify` — any change triggers an automatic re-scan after a short
+debounce. Pressing `#` or `D` writes directly to the source file; on
+the first mutation of each file the original is snapshotted next to it
+as `<file>.checkssl-<timestamp>.bak`, so an accidental delete is one
+`cp` away from being undone. Domains added via `-d` or the hardcoded
+default have no source and are skipped by the edit keys with an
+explanatory status-line note.
 
 ## Config file
 

@@ -53,7 +53,7 @@ func (m model) renderBody() string {
 
 	// --- Footer hint
 	hint := m.st.hint.Render(
-		"j/k nav · g/G ends · l details · e edit · s/S sort · d dir · 1-5 toggle · / filter · r reload · ? help · q quit",
+		"j/k nav · l details · e edit · # comment · D delete · s/S sort · d dir · / filter · r reload · ? help · q quit",
 	)
 
 	main := strings.Join([]string{
@@ -79,6 +79,8 @@ func (m model) renderBody() string {
 		return m.renderWithOverlay(main, m.renderHelpOverlay())
 	case modeDetails:
 		return m.renderWithOverlay(main, m.renderDetailsOverlay())
+	case modeConfirmDelete:
+		return m.renderWithOverlay(main, m.renderConfirmDeleteOverlay())
 	}
 	return main
 }
@@ -304,6 +306,8 @@ func (m model) renderHelpOverlay() string {
 		{"ctrl+d / ctrl+u", "scroll ten rows"},
 		{"l · enter", "details for the selected host (source file, issuer, error)"},
 		{"e", "open $EDITOR on the source file at the right line"},
+		{"#", "comment out the selected line (writes to the source file)"},
+		{"D", "delete the selected line from the source file (confirm with y)"},
 		{"s / S", "cycle sort column forward / backward"},
 		{"d", "toggle sort direction (asc ↔ desc)"},
 		{"1 … 5", "toggle valid · expiring · expired · invalid · error"},
@@ -332,6 +336,22 @@ func (m model) renderHelpOverlay() string {
 // or Enter on a row. It surfaces the per-domain information that the
 // one-line table has to crop: full source file + line, issuer, errors,
 // SANs. Rendered as a bottom-aligned panel over the main view.
+// renderConfirmDeleteOverlay replaces the hint line with a yes/no
+// prompt naming the host and source file. `y` confirms, anything else
+// cancels. Kept on a single line so no modal panel is needed.
+func (m model) renderConfirmDeleteOverlay() string {
+	if m.cursor >= len(m.rows) {
+		return m.st.hint.Render("")
+	}
+	r := m.rows[m.cursor]
+	loc := fmt.Sprintf("%s:%d", displayPath(r.Source), r.SourceLine)
+	warn := m.st.colCrit.Render("delete")
+	host := m.st.helpKey.Render(r.Domain)
+	return m.st.hint.Render(warn+" "+host+" from "+loc+"? ") +
+		m.st.helpKey.Render("y") +
+		m.st.hint.Render(" confirm · any other key cancels")
+}
+
 func (m model) renderDetailsOverlay() string {
 	if m.cursor >= len(m.rows) {
 		return ""
@@ -398,15 +418,15 @@ func displayPath(p string) string {
 }
 
 func (m model) renderWithOverlay(main, overlay string) string {
-	if m.mode == modeFilter {
-		// Filter prompt lives on the last line; replace the hint line with it.
+	if m.mode == modeFilter || m.mode == modeConfirmDelete {
+		// Both prompts live on the last line (the hint); replace it.
 		lines := strings.Split(main, "\n")
 		if len(lines) > 0 {
 			lines[len(lines)-1] = overlay
 		}
 		return strings.Join(lines, "\n")
 	}
-	// Help: overlay a centred panel on top of the main view.
+	// Help & details: overlay a centred panel on top of the main view.
 	return lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, overlay,
 		lipgloss.WithWhitespaceChars(""))
 }

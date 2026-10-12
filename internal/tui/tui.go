@@ -163,6 +163,7 @@ const (
 	modeFilter
 	modeHelp
 	modeDetails
+	modeConfirmDelete
 )
 
 type model struct {
@@ -187,7 +188,8 @@ type model struct {
 	mode      mode
 	width     int
 	height    int
-	lastError string // transient status-line note (editor failures etc.)
+	lastError string         // transient status-line note (editor failures etc.)
+	writer    *config.Writer // session-scoped mutator; nil disables edit keys
 
 	// Styles
 	st styles
@@ -195,10 +197,11 @@ type model struct {
 
 func initialModel(opts Options) model {
 	return model{
-		opts:  opts,
-		chips: defaultChipState(),
-		sort:  sortByDays,
-		st:    newStyles(),
+		opts:   opts,
+		chips:  defaultChipState(),
+		sort:   sortByDays,
+		st:     newStyles(),
+		writer: config.NewWriter(),
 	}
 }
 
@@ -400,6 +403,17 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Confirm-delete mode: y accepts, anything else cancels.
+	if m.mode == modeConfirmDelete {
+		m.mode = modeNormal
+		if key == "y" || key == "Y" {
+			if cmd := m.deleteSelected(); cmd != nil {
+				return m, cmd
+			}
+		}
+		return m, nil
+	}
+
 	// Normal mode
 	switch key {
 	case "q", "ctrl+c":
@@ -423,6 +437,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		if cmd := m.editSelected(); cmd != nil {
 			return m, cmd
+		}
+	case "#":
+		if cmd := m.commentOutSelected(); cmd != nil {
+			return m, cmd
+		}
+	case "D":
+		// `D` arms the delete confirm — a yes/no prompt lands in the
+		// footer. Prevents an accidental Shift+d from nuking a line.
+		if len(m.rows) > 0 && m.rows[m.cursor].Source != "" {
+			m.mode = modeConfirmDelete
 		}
 	case "/":
 		m.mode = modeFilter
@@ -471,6 +495,49 @@ func (m *model) moveCursor(delta int) {
 func (m *model) toggleChip(s cert.Status) {
 	m.chips[s] = !m.chips[s]
 	m.rebuildRows()
+}
+
+// commentOutSelected prepends "# " to the source line of the currently
+// selected row. Backs up the file on the first write of the session.
+// Returns a reload command on success so the row disappears from the
+// view immediately; returns nil + a status-line note when the row has
+// no source or the write fails.
+func (m *model) commentOutSelected() tea.Cmd {
+	if m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	if r.Source == "" || r.SourceLine == 0 {
+		m.lastError = "no source file for this row — nothing to comment out"
+		return nil
+	}
+	if err := m.writer.CommentOutLine(r.Source, r.SourceLine); err != nil {
+		m.lastError = fmt.Sprintf("# failed: %v", err)
+		return nil
+	}
+	m.lastError = ""
+	return m.reload()
+}
+
+// deleteSelected drops the source line of the currently selected row
+// from its file. Called from the confirm-delete modal; the modal must
+// have been armed by `D` on a row with a source. Same backup + reload
+// semantics as commentOutSelected.
+func (m *model) deleteSelected() tea.Cmd {
+	if m.cursor >= len(m.rows) {
+		return nil
+	}
+	r := m.rows[m.cursor]
+	if r.Source == "" || r.SourceLine == 0 {
+		m.lastError = "no source file for this row — nothing to delete"
+		return nil
+	}
+	if err := m.writer.DeleteLine(r.Source, r.SourceLine); err != nil {
+		m.lastError = fmt.Sprintf("delete failed: %v", err)
+		return nil
+	}
+	m.lastError = ""
+	return m.reload()
 }
 
 // editSelected opens $EDITOR on the source file of the currently-selected

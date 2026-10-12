@@ -103,13 +103,28 @@ ignores this flag.
 .BR \-i ", " \-\-tui
 Launch the interactive terminal UI instead of printing a one-shot
 report. Shows the scan as it runs, with keyboard-driven navigation,
-filtering and sorting. Keys:
+filtering, sorting, and in-place edits of the source config files.
+Keys:
 .BR j / k
 navigate,
 .BR g / G
 jump to first/last,
+.BR l / Enter
+details panel for the selected row,
+.BR e
+open
+.B $EDITOR
+on the source file at the right line,
+.B #
+comment out the selected line,
+.B D
+delete the selected line (needs
+.B y
+to confirm),
 .BR s / S
 cycle sort column,
+.B d
+toggle sort direction,
 .BR 1 - 5
 toggle status buckets,
 .BR /
@@ -120,6 +135,14 @@ re-scan,
 help,
 .BR q
 quit.
+.IP
+External edits to the watched config files (vim, VSCode, …) trigger
+an automatic re-scan via
+.BR fsnotify (3).
+On the first in-TUI mutation of a file, the original is snapshotted
+to
+.IR <file>.checkssl-<timestamp>.bak
+in the same directory.
 .TP
 .BR \-h ", " \-\-help
 Print help.
