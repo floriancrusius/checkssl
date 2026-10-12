@@ -11,7 +11,7 @@ import (
 func TestStartFileWatcher_NoEntriesReturnsNil(t *testing.T) {
 	// -d only (no file provenance): nothing to watch, so no watcher
 	// should be created. Callers must tolerate that return.
-	w, err := startFileWatcher(nil, []config.Entry{{Domain: "x.example"}})
+	w, err := startFileWatcher(nil, []config.Entry{{Domain: "x.example"}}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestStartFileWatcher_WatchesParentDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries := []config.Entry{{Domain: "example.com", File: file, Line: 1}}
-	w, err := startFileWatcher(nil, entries)
+	w, err := startFileWatcher(nil, entries, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

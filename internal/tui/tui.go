@@ -55,8 +55,9 @@ func Run(opts Options) error {
 	// Watch the config files for external edits (vim, VSCode, …). On a
 	// filesChangedMsg the TUI triggers a reload automatically. Best
 	// effort: if the OS cannot give us a watcher we silently continue
-	// without hot-reload.
-	if w, err := startFileWatcher(p, opts.Entries); err == nil && w != nil {
+	// without hot-reload. The writer is passed so the watcher can
+	// distinguish our own in-TUI edits from external ones.
+	if w, err := startFileWatcher(p, opts.Entries, m.writer); err == nil && w != nil {
 		defer w.Close() //nolint:errcheck // nothing useful to do with the error on shutdown
 	}
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,23 +15,50 @@ import (
 // — a safety net for the user when the TUI deletes or comments a line
 // out directly, bypassing any editor's own undo.
 type Writer struct {
-	backedUp  map[string]string // original path → backup path
-	timestamp string
+	mu           sync.Mutex
+	backedUp     map[string]string    // original path → backup path
+	recentWrites map[string]time.Time // path → when the Writer wrote to it
+	timestamp    string
 }
 
 // NewWriter returns a Writer with a fresh session timestamp. One
 // Writer per TUI session is the intended pattern.
 func NewWriter() *Writer {
 	return &Writer{
-		backedUp:  make(map[string]string),
-		timestamp: time.Now().Format("20060102-150405"),
+		backedUp:     make(map[string]string),
+		recentWrites: make(map[string]time.Time),
+		timestamp:    time.Now().Format("20060102-150405"),
 	}
 }
 
 // BackupPath returns the backup path that would be / was used for path
 // in this session, or empty if the file has not been touched yet.
 func (w *Writer) BackupPath(path string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.backedUp[path]
+}
+
+// WroteRecently reports whether this Writer wrote to path within the
+// given window. Lets a file watcher distinguish our own atomic rename
+// (which fires a Create event on the original) from a genuine external
+// edit, so an in-TUI `#` doesn't trigger a redundant hot-reload a few
+// hundred ms after the immediate one.
+func (w *Writer) WroteRecently(path string, within time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	t, ok := w.recentWrites[path]
+	if !ok {
+		return false
+	}
+	return time.Since(t) <= within
+}
+
+// markWrote records that we just finished writing path.
+func (w *Writer) markWrote(path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.recentWrites[path] = time.Now()
 }
 
 // CommentOutLine rewrites path so the given 1-indexed line is prefixed
@@ -49,7 +77,11 @@ func (w *Writer) CommentOutLine(path string, line int) error {
 		return err
 	}
 	lines[line-1] = "# " + lines[line-1]
-	return writeAtomic(path, []byte(strings.Join(lines, "\n")))
+	if err := writeAtomic(path, []byte(strings.Join(lines, "\n"))); err != nil {
+		return err
+	}
+	w.markWrote(path)
+	return nil
 }
 
 // DeleteLine removes the given 1-indexed line from path entirely. The
@@ -63,7 +95,11 @@ func (w *Writer) DeleteLine(path string, line int) error {
 		return err
 	}
 	lines = append(lines[:line-1], lines[line:]...)
-	return writeAtomic(path, []byte(strings.Join(lines, "\n")))
+	if err := writeAtomic(path, []byte(strings.Join(lines, "\n"))); err != nil {
+		return err
+	}
+	w.markWrote(path)
+	return nil
 }
 
 // readLines loads path and splits it on "\n", returning an error when
@@ -86,41 +122,39 @@ func (w *Writer) readLines(path string, line int) ([]string, error) {
 	return lines, nil
 }
 
-// backupSubdir is the hidden folder next to the modified file where
-// per-session snapshots land. A dotfile name keeps the folder out of
-// typical `~/.domains/*` globs; its contents are files, not configs,
-// and are silently skipped by the parser's `IsDir` check anyway.
-const backupSubdir = ".checkssl-backups"
-
-// ensureBackup copies path to <dir>/.checkssl-backups/<basename>.<ts>.bak
-// the first time it is called for path in this session. Subsequent
-// calls are no-ops so the backup always reflects the pre-session state.
+// ensureBackup copies path to <path>.checkssl-<timestamp>.bak the first
+// time it is called for path in this session. Subsequent calls are
+// no-ops so the backup always reflects the pre-session state.
 //
-// Backups MUST NOT land next to the original: a config file at
-// ~/.domains/foo and a glob of ~/.domains/* would otherwise re-read the
-// backup as another config, undoing the commented-out line. The
-// hidden subdir sidesteps that, and the parser skips directories
-// matched by a glob, so no change to the parser is needed.
+// The backup lands right next to the original. The parser's
+// isBackupFile filter keeps `~/.domains/*` globs from re-ingesting
+// these files as live configs — the alternative of hiding them in a
+// subdir meant another cluttered location, so we trust the filter.
 func (w *Writer) ensureBackup(path string) error {
+	w.mu.Lock()
 	if _, done := w.backedUp[path]; done {
+		w.mu.Unlock()
 		return nil
 	}
-	//nolint:gosec // see mutate().
+	w.mu.Unlock()
+
+	//nolint:gosec // see readLines().
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s for backup: %w", path, err)
 	}
-	dir := filepath.Join(filepath.Dir(path), backupSubdir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	base := filepath.Base(path)
-	backup := filepath.Join(dir, fmt.Sprintf("%s.%s.bak", base, w.timestamp))
+	backup := fmt.Sprintf("%s.checkssl-%s.bak", path, w.timestamp)
 	//nolint:gosec // backup path is derived from a tracked config path.
 	if err := os.WriteFile(backup, data, 0o600); err != nil {
 		return fmt.Errorf("write backup %s: %w", backup, err)
 	}
+	w.mu.Lock()
 	w.backedUp[path] = backup
+	w.mu.Unlock()
+	// The backup is a new file in the same dir — if a watcher is
+	// watching that dir, mark the backup path too so the subsequent
+	// Create event is filtered out as a self-write.
+	w.markWrote(backup)
 	return nil
 }
 

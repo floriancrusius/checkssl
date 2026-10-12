@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriter_CommentOutLine(t *testing.T) {
@@ -68,11 +69,10 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 	if backup == "" {
 		t.Fatal("no backup recorded")
 	}
-	// Backup must land in the hidden sibling directory, NOT next to the
-	// original — otherwise a glob like `~/.domains/*` would re-ingest it.
-	wantDir := filepath.Join(dir, backupSubdir)
-	if filepath.Dir(backup) != wantDir {
-		t.Errorf("backup went to %q, want parent dir %q", backup, wantDir)
+	// Backup must land next to the original — the parser's isBackupFile
+	// filter keeps a `~/.domains/*` glob from re-ingesting it.
+	if filepath.Dir(backup) != dir {
+		t.Errorf("backup went to %q, want parent dir %q", backup, dir)
 	}
 	data, err := os.ReadFile(backup) //nolint:gosec // test file in tempdir
 	if err != nil {
@@ -96,7 +96,33 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 	}
 }
 
-func TestWriter_BackupSubdirKeepsGlobClean(t *testing.T) {
+func TestWriter_WroteRecentlyFlagsSelfWrites(t *testing.T) {
+	// After a successful CommentOutLine the Writer must report
+	// WroteRecently(true) for both the original path AND the backup
+	// path it just created — otherwise the file watcher would treat
+	// one of them as an external edit and fire a redundant reload.
+	dir := t.TempDir()
+	f := writeFile(t, filepath.Join(dir, "d.txt"), "example.com\n")
+	w := NewWriter()
+	if err := w.CommentOutLine(f, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !w.WroteRecently(f, 2*time.Second) {
+		t.Error("original path not flagged as recently-written")
+	}
+	if backup := w.BackupPath(f); backup == "" {
+		t.Fatal("no backup path recorded")
+	} else if !w.WroteRecently(backup, 2*time.Second) {
+		t.Error("backup path not flagged as recently-written")
+	}
+	// And something we did NOT write must come back false, so the
+	// watcher doesn't accidentally silence genuine external edits.
+	if w.WroteRecently("/nope/never-touched", 2*time.Second) {
+		t.Error("WroteRecently returned true for an unknown path")
+	}
+}
+
+func TestWriter_BackupNextToOriginal(t *testing.T) {
 	// A full round-trip: write, then re-parse via a glob that would
 	// have matched the backup if it lived next to the original. The
 	// commented-out domain must stay commented-out — not resurrect

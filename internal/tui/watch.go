@@ -32,7 +32,12 @@ const debounceWindow = 500 * time.Millisecond
 // (write-tmp + rename) that editors like vim perform still trigger
 // reloads — a direct file watch gets dropped on the delete half of
 // the rename.
-func startFileWatcher(prog *tea.Program, entries []config.Entry) (*fsnotify.Watcher, error) {
+//
+// writer (optional) lets the watcher distinguish our own in-TUI mutations
+// from genuine external edits. Our mutations already trigger an immediate
+// reload, so letting fsnotify fire a second one would make the TUI
+// visibly re-render twice per keystroke.
+func startFileWatcher(prog *tea.Program, entries []config.Entry, writer *config.Writer) (*fsnotify.Watcher, error) {
 	tracked := make(map[string]struct{})
 	dirs := make(map[string]struct{})
 	for _, e := range entries {
@@ -89,6 +94,13 @@ func startFileWatcher(prog *tea.Program, entries []config.Entry) (*fsnotify.Watc
 					continue
 				}
 				if _, interesting := tracked[ev.Name]; !interesting {
+					continue
+				}
+				// Our own in-TUI mutations fire fsnotify too; skip them
+				// so the user doesn't see a second re-render after the
+				// immediate reload. The grace window covers debounce
+				// plus some filesystem event lag.
+				if writer != nil && writer.WroteRecently(ev.Name, debounceWindow+500*time.Millisecond) {
 					continue
 				}
 				mu.Lock()
