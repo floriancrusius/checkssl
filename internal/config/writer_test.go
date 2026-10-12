@@ -13,7 +13,7 @@ func TestWriter_CommentOutLine(t *testing.T) {
 	f := writeFile(t, filepath.Join(dir, "d.txt"),
 		"# header\nexample.com\ntest.org\n")
 
-	w := NewWriter()
+	w := NewWriter(filepath.Join(dir, "_backups"))
 	if err := w.CommentOutLine(f, 2); err != nil {
 		t.Fatalf("CommentOutLine: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestWriter_CommentOutLine(t *testing.T) {
 func TestWriter_CommentOutLineIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	f := writeFile(t, filepath.Join(dir, "d.txt"), "# already\n")
-	w := NewWriter()
+	w := NewWriter(filepath.Join(dir, "_backups"))
 	before, _ := os.ReadFile(f) //nolint:gosec // test file in tempdir
 	if err := w.CommentOutLine(f, 1); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestWriter_DeleteLine(t *testing.T) {
 	f := writeFile(t, filepath.Join(dir, "d.txt"),
 		"example.com\ntest.org\nother.net\n")
 
-	w := NewWriter()
+	w := NewWriter(filepath.Join(dir, "_backups"))
 	if err := w.DeleteLine(f, 2); err != nil {
 		t.Fatalf("DeleteLine: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 	original := "example.com\ntest.org\nkeep.me\n"
 	f := writeFile(t, filepath.Join(dir, "d.txt"), original)
 
-	w := NewWriter()
+	w := NewWriter(filepath.Join(dir, "_backups"))
 	if err := w.DeleteLine(f, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +69,15 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 	if backup == "" {
 		t.Fatal("no backup recorded")
 	}
-	// Backup must land next to the original — the parser's isBackupFile
-	// filter keeps a `~/.domains/*` glob from re-ingesting it.
-	if filepath.Dir(backup) != dir {
-		t.Errorf("backup went to %q, want parent dir %q", backup, dir)
+	// Backup must live UNDER the backupRoot — never next to the original.
+	// A sibling backup would be matched by a `~/.domains/*` glob and
+	// resurrect commented-out domains.
+	backupRoot := filepath.Join(dir, "_backups")
+	if !strings.HasPrefix(backup, backupRoot) {
+		t.Errorf("backup %q is not under backupRoot %q", backup, backupRoot)
+	}
+	if filepath.Dir(backup) == dir {
+		t.Errorf("backup landed next to original: %q", backup)
 	}
 	data, err := os.ReadFile(backup) //nolint:gosec // test file in tempdir
 	if err != nil {
@@ -98,22 +103,18 @@ func TestWriter_BackupOnFirstWriteOnly(t *testing.T) {
 
 func TestWriter_WroteRecentlyFlagsSelfWrites(t *testing.T) {
 	// After a successful CommentOutLine the Writer must report
-	// WroteRecently(true) for both the original path AND the backup
-	// path it just created — otherwise the file watcher would treat
-	// one of them as an external edit and fire a redundant reload.
+	// WroteRecently(true) for the original path — otherwise the file
+	// watcher would treat our own atomic rename as an external edit
+	// and fire a redundant reload. Backups now live outside the
+	// watched config dir, so they don't need the flag themselves.
 	dir := t.TempDir()
 	f := writeFile(t, filepath.Join(dir, "d.txt"), "example.com\n")
-	w := NewWriter()
+	w := NewWriter(filepath.Join(t.TempDir(), "backups"))
 	if err := w.CommentOutLine(f, 1); err != nil {
 		t.Fatal(err)
 	}
 	if !w.WroteRecently(f, 2*time.Second) {
 		t.Error("original path not flagged as recently-written")
-	}
-	if backup := w.BackupPath(f); backup == "" {
-		t.Fatal("no backup path recorded")
-	} else if !w.WroteRecently(backup, 2*time.Second) {
-		t.Error("backup path not flagged as recently-written")
 	}
 	// And something we did NOT write must come back false, so the
 	// watcher doesn't accidentally silence genuine external edits.
@@ -122,15 +123,15 @@ func TestWriter_WroteRecentlyFlagsSelfWrites(t *testing.T) {
 	}
 }
 
-func TestWriter_BackupNextToOriginal(t *testing.T) {
+func TestWriter_GlobDoesNotMatchBackup(t *testing.T) {
 	// A full round-trip: write, then re-parse via a glob that would
 	// have matched the backup if it lived next to the original. The
 	// commented-out domain must stay commented-out — not resurrect
-	// from the backup.
+	// from the backup (which now lives under the cache dir anyway).
 	dir := t.TempDir()
 	f := writeFile(t, filepath.Join(dir, "list.txt"), "a.example\nb.example\n")
 
-	w := NewWriter()
+	w := NewWriter(filepath.Join(t.TempDir(), "backups"))
 	if err := w.CommentOutLine(f, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +143,74 @@ func TestWriter_BackupNextToOriginal(t *testing.T) {
 	}
 }
 
+func TestWriter_NoBackupRootDisablesBackups(t *testing.T) {
+	// Setting backupRoot to "" means "the caller opted out of backups".
+	// The write must still succeed and no backup should be recorded.
+	dir := t.TempDir()
+	f := writeFile(t, filepath.Join(dir, "d.txt"), "a.example\n")
+	w := NewWriter("") // no backups
+	if err := w.CommentOutLine(f, 1); err != nil {
+		t.Fatalf("CommentOutLine: %v", err)
+	}
+	got, _ := os.ReadFile(f) //nolint:gosec // test file in tempdir
+	if string(got) != "# a.example\n" {
+		t.Errorf("file after commentout = %q", got)
+	}
+	if w.BackupPath(f) != "" {
+		t.Errorf("expected no backup when backupRoot is empty, got %q", w.BackupPath(f))
+	}
+}
+
+func TestPruneOlderThan_RemovesExpiredSessions(t *testing.T) {
+	root := t.TempDir()
+	// Three sessions: one old (should go), one just old enough (go),
+	// one fresh (keep). Plus one random folder that doesn't match the
+	// timestamp format (keep — not ours to touch).
+	old := time.Now().Add(-48 * time.Hour).Format("20060102-150405")
+	borderline := time.Now().Add(-24 * time.Hour).Format("20060102-150405")
+	fresh := time.Now().Format("20060102-150405")
+	for _, name := range []string{old, borderline, fresh, "something-else"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := PruneOlderThan(root, 20*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Errorf("removed %d sessions, want 2", removed)
+	}
+	// Fresh and the non-timestamp folder must still be there.
+	for _, name := range []string{fresh, "something-else"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Errorf("missing after prune: %s", name)
+		}
+	}
+	// Old and borderline must be gone.
+	for _, name := range []string{old, borderline} {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+			t.Errorf("expired session still there: %s", name)
+		}
+	}
+}
+
+func TestPruneOlderThan_MissingRootIsNoop(t *testing.T) {
+	// Call before any backup has ever been taken — should not error.
+	n, err := PruneOlderThan(filepath.Join(t.TempDir(), "nothing-here"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("removed %d, want 0", n)
+	}
+}
+
 func TestWriter_OutOfRangeLineReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	f := writeFile(t, filepath.Join(dir, "d.txt"), "only.one\n")
-	w := NewWriter()
+	w := NewWriter(filepath.Join(dir, "_backups"))
 	if err := w.CommentOutLine(f, 42); err == nil {
 		t.Error("expected an error for line past EOF")
 	}
@@ -162,7 +227,7 @@ func TestWriter_PreservesFileMode(t *testing.T) {
 	if err := os.Chmod(f, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w := NewWriter()
+	w := NewWriter(filepath.Join(dir, "_backups"))
 	if err := w.CommentOutLine(f, 1); err != nil {
 		t.Fatal(err)
 	}

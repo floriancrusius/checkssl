@@ -11,23 +11,30 @@ import (
 
 // Writer mutates checkssl config files in place. It keeps a per-session
 // record of which files have already been backed up so the first write
-// to each file snapshots the original to <file>.checkssl-<timestamp>.bak
-// — a safety net for the user when the TUI deletes or comments a line
-// out directly, bypassing any editor's own undo.
+// to each file snapshots the original to a session folder inside the
+// user's cache directory — a safety net for the user when the TUI
+// deletes or comments a line out directly, bypassing any editor's undo.
 type Writer struct {
 	mu           sync.Mutex
 	backedUp     map[string]string    // original path → backup path
 	recentWrites map[string]time.Time // path → when the Writer wrote to it
 	timestamp    string
+	// backupRoot is where this session's backup folder lives. Each file
+	// gets a mirror-path underneath — e.g. for /home/u/.config/checkssl
+	// /domains it becomes <backupRoot>/<sessionTS>/domains.
+	backupRoot string
 }
 
-// NewWriter returns a Writer with a fresh session timestamp. One
-// Writer per TUI session is the intended pattern.
-func NewWriter() *Writer {
+// NewWriter returns a Writer with a fresh session timestamp and the
+// given backup root — typically paths.BackupsDir(). One Writer per TUI
+// session is the intended pattern. An empty backupRoot disables
+// backups entirely (callers must have asked for that explicitly).
+func NewWriter(backupRoot string) *Writer {
 	return &Writer{
 		backedUp:     make(map[string]string),
 		recentWrites: make(map[string]time.Time),
 		timestamp:    time.Now().Format("20060102-150405"),
+		backupRoot:   backupRoot,
 	}
 }
 
@@ -122,14 +129,14 @@ func (w *Writer) readLines(path string, line int) ([]string, error) {
 	return lines, nil
 }
 
-// ensureBackup copies path to <path>.checkssl-<timestamp>.bak the first
-// time it is called for path in this session. Subsequent calls are
-// no-ops so the backup always reflects the pre-session state.
+// ensureBackup copies path into the session's backup folder the first
+// time it is called for path. Subsequent calls are no-ops so the backup
+// always reflects the pre-session state.
 //
-// The backup lands right next to the original. The parser's
-// isBackupFile filter keeps `~/.domains/*` globs from re-ingesting
-// these files as live configs — the alternative of hiding them in a
-// subdir meant another cluttered location, so we trust the filter.
+// Backups live in <backupRoot>/<sessionTS>/<mirror of absolute path>,
+// which keeps them out of any @include glob the user has pointed at
+// their config dir. No parser-side filter needed, and old sessions'
+// backups can be pruned by date later (see PruneOlderThan).
 func (w *Writer) ensureBackup(path string) error {
 	w.mu.Lock()
 	if _, done := w.backedUp[path]; done {
@@ -138,24 +145,82 @@ func (w *Writer) ensureBackup(path string) error {
 	}
 	w.mu.Unlock()
 
+	if w.backupRoot == "" {
+		// Backups disabled — proceed without snapshot. The caller
+		// opted into this.
+		w.mu.Lock()
+		w.backedUp[path] = ""
+		w.mu.Unlock()
+		return nil
+	}
+
 	//nolint:gosec // see readLines().
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s for backup: %w", path, err)
 	}
-	backup := fmt.Sprintf("%s.checkssl-%s.bak", path, w.timestamp)
-	//nolint:gosec // backup path is derived from a tracked config path.
+	backup, err := w.backupPath(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(backup), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(backup), err)
+	}
+	//nolint:gosec // backup path is derived from backupRoot + the config path.
 	if err := os.WriteFile(backup, data, 0o600); err != nil {
 		return fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	w.mu.Lock()
 	w.backedUp[path] = backup
 	w.mu.Unlock()
-	// The backup is a new file in the same dir — if a watcher is
-	// watching that dir, mark the backup path too so the subsequent
-	// Create event is filtered out as a self-write.
-	w.markWrote(backup)
 	return nil
+}
+
+// backupPath turns an original absolute path into its mirror location
+// under the session backup dir. A leading separator in the mirror
+// stays — the whole absolute path is a key, we just avoid letting it
+// collide with another file of the same basename elsewhere.
+func (w *Writer) backupPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	// On Windows the drive letter looks like "C:\…" — join accepts it;
+	// we just strip the colon to keep the path portable.
+	safe := strings.ReplaceAll(abs, ":", "")
+	return filepath.Join(w.backupRoot, w.timestamp, safe), nil
+}
+
+// PruneOlderThan deletes session folders under backupRoot whose
+// timestamp is older than `max`. Called from `checkssl config gc`
+// and (optionally) at TUI startup to keep the cache dir bounded.
+// Returns the number of session folders removed.
+func PruneOlderThan(backupRoot string, max time.Duration) (int, error) {
+	entries, err := os.ReadDir(backupRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	cutoff := time.Now().Add(-max)
+	removed := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Session folders are named "20060102-150405" (writer timestamp).
+		t, err := time.Parse("20060102-150405", e.Name())
+		if err != nil {
+			continue // skip anything that doesn't match our naming
+		}
+		if t.Before(cutoff) {
+			if err := os.RemoveAll(filepath.Join(backupRoot, e.Name())); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
 }
 
 // writeAtomic writes data to path via a tmp file + rename so a crash

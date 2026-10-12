@@ -93,14 +93,12 @@ func readFileWithSeen(path string, addErr func(string), seen map[string]struct{}
 	return out
 }
 
-// isBackupFile reports whether the basename matches the pattern this
-// package writes backups under. A defensive filter so an @include glob
-// like `~/.domains/*` doesn't accidentally re-ingest a backup file
-// (which would undo the commented-out line it was supposed to snapshot).
-// Writer now puts new backups in a hidden subdir, but existing pollution
-// from older versions can still live next to the originals.
+// isBackupFile reports whether the basename matches the backup pattern
+// that pre-v2 Writer versions dropped next to the original config file.
+// Current writes land in the user's cache dir, but existing pollution
+// from older versions can still live in ~/.domains/ — skip them so a
+// commented-out domain doesn't resurrect from a stale backup.
 func isBackupFile(name string) bool {
-	// Pattern: anything containing ".checkssl-" and ending in ".bak".
 	return strings.Contains(name, ".checkssl-") && strings.HasSuffix(name, ".bak")
 }
 

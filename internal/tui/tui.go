@@ -7,8 +7,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/floriancrusius/checkssl/internal/cert"
 	"github.com/floriancrusius/checkssl/internal/config"
+	"github.com/floriancrusius/checkssl/internal/editor"
 )
 
 // Options is what the CLI hands over to Run.
@@ -27,6 +26,15 @@ type Options struct {
 	Timeout     time.Duration
 	Concurrency int
 	ShowIP      bool
+	// BackupRoot is the directory where this session's in-TUI edit
+	// backups live (one timestamped folder per Writer instance under
+	// it). Empty disables backups.
+	BackupRoot string
+	// EditorCmd is the template used when `e` opens the source file
+	// or `,` opens the config file. See internal/editor.Resolve for
+	// the placeholder semantics; empty falls through to
+	// $VISUAL / $EDITOR / vi.
+	EditorCmd string
 	// Reload re-parses the user's original source (config file + -d args)
 	// and returns the fresh entry list. Called on every reload (manual
 	// `r`, post-edit, fsnotify) so edits that add or remove domains are
@@ -202,7 +210,7 @@ func initialModel(opts Options) model {
 		chips:  defaultChipState(),
 		sort:   sortByDays,
 		st:     newStyles(),
-		writer: config.NewWriter(),
+		writer: config.NewWriter(opts.BackupRoot),
 	}
 }
 
@@ -553,10 +561,11 @@ func (m *model) deleteSelected() tea.Cmd {
 	return m.reload()
 }
 
-// editSelected opens $EDITOR on the source file of the currently-selected
-// row, jumping to its line. Returns nil (no command) when there is no
-// row selected or the row has no file provenance (e.g. a -d command-line
-// domain). Falls back to `vi` when $EDITOR is unset.
+// editSelected opens the configured editor on the source file of the
+// currently-selected row, jumping to its line. Returns nil (no command)
+// when there is no row selected or the row has no file provenance
+// (e.g. a -d command-line domain). The template comes from
+// opts.EditorCmd; empty falls through to $VISUAL / $EDITOR / vi.
 func (m *model) editSelected() tea.Cmd {
 	if m.cursor >= len(m.rows) {
 		return nil
@@ -566,16 +575,11 @@ func (m *model) editSelected() tea.Cmd {
 		m.lastError = "no source file for this row (added via -d or built-in default)"
 		return nil
 	}
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
+	cmd, err := editor.Resolve(m.opts.EditorCmd, r.Source, r.SourceLine)
+	if err != nil {
+		m.lastError = fmt.Sprintf("editor: %v", err)
+		return nil
 	}
-	// `+<line>` is the near-universal convention understood by vi, vim,
-	// nvim, nano, and most emacs frontends. VSCode's `code` wants
-	// `--goto file:line` instead — users of code set $EDITOR to a
-	// wrapper that translates, we don't try to detect it here.
-	//nolint:gosec // editor+file paths come from user config; invoking them is the whole point.
-	cmd := exec.Command(editor, fmt.Sprintf("+%d", r.SourceLine), r.Source)
 	m.lastError = ""
 	src := r.Source
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {

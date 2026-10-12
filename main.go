@@ -14,13 +14,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/floriancrusius/checkssl/internal/cert"
 	"github.com/floriancrusius/checkssl/internal/config"
+	"github.com/floriancrusius/checkssl/internal/paths"
 	"github.com/floriancrusius/checkssl/internal/render"
+	"github.com/floriancrusius/checkssl/internal/settings"
 	"github.com/floriancrusius/checkssl/internal/tui"
 )
 
@@ -37,11 +40,6 @@ var completionFish string
 var Version = "dev"
 
 const (
-	defaultConfigFile  = ".checkssl"
-	defaultDomain      = "google.com"
-	defaultFormat      = "table"
-	defaultConcurrency = 100
-	defaultTimeoutSecs = 5
 	exitCodeSuccess    = 0
 	exitCodeError      = 1
 	exitCodeUsageError = 2
@@ -142,7 +140,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCompletion(args[1:], stdout, stderr)
 	}
 
-	opts, parseErr := parseFlags(args, stderr)
+	// Load settings early so flag defaults reflect what the user has
+	// pinned in config.toml (and env). A missing config file is fine —
+	// settings.Load returns pure defaults in that case. A broken one
+	// is fatal: we don't want silent misreads.
+	cfgPath, _ := paths.ConfigFile()
+	cfg, cfgErr := settings.Load(cfgPath)
+	if cfgErr != nil {
+		fmt.Fprintln(stderr, "config error:", cfgErr)
+		return exitCodeUsageError
+	}
+
+	opts, parseErr := parseFlags(args, stderr, cfg)
 	if parseErr != nil {
 		fmt.Fprintln(stderr, "error:", parseErr)
 		printUsage(stderr)
@@ -175,20 +184,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	addErr := func(s string) { errs = append(errs, s) }
 
 	// Collect domains from -d/--domain and -f/--file first; only fall back
-	// to the default config file if the user gave no source at all.
+	// to the configured default source if the user gave no source at all.
 	entries, sourceGiven := collectEntries(opts, addErr)
 	if !sourceGiven && len(entries) == 0 {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			path := filepath.Join(home, defaultConfigFile)
-			if _, statErr := os.Stat(path); statErr == nil {
-				entries = append(entries, config.ReadFile(path, addErr)...)
-				entries = config.DedupeFirst(entries)
-			}
-		}
+		entries = loadDefaultSource(cfg, addErr, stderr)
 	}
 	if len(entries) == 0 {
-		entries = []config.Entry{{Domain: defaultDomain}}
+		entries = []config.Entry{{Domain: cfg.FallbackDomain}}
 	}
 
 	// --tui takes over — swap the one-shot report for the interactive view.
@@ -203,25 +205,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		reparse := func() []config.Entry {
 			fresh, sourceGivenReload := collectEntries(opts, swallow)
 			if !sourceGivenReload && len(fresh) == 0 {
-				home, err := os.UserHomeDir()
-				if err == nil {
-					path := filepath.Join(home, defaultConfigFile)
-					if _, statErr := os.Stat(path); statErr == nil {
-						fresh = append(fresh, config.ReadFile(path, swallow)...)
-						fresh = config.DedupeFirst(fresh)
-					}
-				}
+				fresh = loadDefaultSource(cfg, swallow, io.Discard)
 			}
 			if len(fresh) == 0 {
-				fresh = []config.Entry{{Domain: defaultDomain}}
+				fresh = []config.Entry{{Domain: cfg.FallbackDomain}}
 			}
 			return fresh
 		}
+		backupRoot, _ := paths.BackupsDir()
 		if err := tui.Run(tui.Options{
 			Entries:     entries,
 			Timeout:     opts.timeout,
 			Concurrency: opts.concurrency,
 			ShowIP:      opts.showIP,
+			BackupRoot:  backupRoot,
+			EditorCmd:   cfg.EditorCmd,
 			Reload:      reparse,
 		}); err != nil {
 			fmt.Fprintln(stderr, "tui error:", err)
@@ -313,11 +311,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return exitCodeSuccess
 }
 
-func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
+func parseFlags(args []string, stderr io.Writer, cfg settings.Settings) (cliOptions, error) {
+	// Flag defaults come from the effective settings (config file + env),
+	// so a CLI invocation without the flag inherits the user's pinned
+	// value. CLI-provided flags still override, and we track that via
+	// fs.Visit afterwards to feed `config show`.
 	opts := cliOptions{
-		format:      defaultFormat,
-		concurrency: defaultConcurrency,
-		timeout:     defaultTimeoutSecs * time.Second,
+		format:         cfg.Format,
+		concurrency:    cfg.Concurrency,
+		timeout:        cfg.Timeout,
+		nagiosWarnDays: cfg.NagiosWarning,
+		nagiosCritDays: cfg.NagiosCritical,
+		showIP:         cfg.ShowIP,
+		htmlStyle:      cfg.HTMLStyle,
 	}
 
 	fs := flag.NewFlagSet("checkssl", flag.ContinueOnError)
@@ -331,18 +337,18 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.Var(&opts.files, "file", "file with one domain per line (repeatable)")
 	fs.BoolVar(&opts.silent, "s", false, "suppress error output")
 	fs.BoolVar(&opts.silent, "silent", false, "suppress error output")
-	fs.StringVar(&opts.format, "format", defaultFormat, "output format: table, csv, json")
+	fs.StringVar(&opts.format, "format", opts.format, "output format: table, csv, json")
 	fs.BoolVar(&opts.help, "h", false, "show help")
 	fs.BoolVar(&opts.help, "help", false, "show help")
 	fs.BoolVar(&opts.version, "v", false, "show version")
 	fs.BoolVar(&opts.version, "version", false, "show version")
-	fs.IntVar(&opts.concurrency, "concurrency", defaultConcurrency, "max parallel TLS handshakes")
-	fs.DurationVar(&opts.timeout, "timeout", defaultTimeoutSecs*time.Second, "per-domain TLS handshake timeout")
-	fs.IntVar(&opts.nagiosWarnDays, "nagios-warning", 30, "warn threshold in days for --format nagios")
-	fs.IntVar(&opts.nagiosCritDays, "nagios-critical", 14, "critical threshold in days for --format nagios")
+	fs.IntVar(&opts.concurrency, "concurrency", opts.concurrency, "max parallel TLS handshakes")
+	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "per-domain TLS handshake timeout")
+	fs.IntVar(&opts.nagiosWarnDays, "nagios-warning", opts.nagiosWarnDays, "warn threshold in days for --format nagios")
+	fs.IntVar(&opts.nagiosCritDays, "nagios-critical", opts.nagiosCritDays, "critical threshold in days for --format nagios")
 	fs.StringVar(&opts.only, "only", "", "comma-separated statuses to include (valid, expiring_soon, expired, invalid, error)")
-	fs.BoolVar(&opts.showIP, "show-ip", false, "include the resolved IP address in table/csv/json/html output")
-	fs.StringVar(&opts.htmlStyle, "html-style", render.HTMLStyleMonitor, "visual style for --format html: monitor or terminal")
+	fs.BoolVar(&opts.showIP, "show-ip", opts.showIP, "include the resolved IP address in table/csv/json/html output")
+	fs.StringVar(&opts.htmlStyle, "html-style", opts.htmlStyle, "visual style for --format html: monitor or terminal")
 	fs.BoolVar(&opts.interactive, "tui", false, "launch the interactive terminal UI instead of printing a report")
 	fs.BoolVar(&opts.interactive, "i", false, "short for --tui")
 
@@ -353,6 +359,58 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 		return opts, fmt.Errorf("--concurrency must be >= 1")
 	}
 	return opts, nil
+}
+
+// loadDefaultSource reads the entries that the user has configured as
+// their standing scan source. Preference order:
+//
+//  1. New-layout <config dir>/domains + domains.d glob
+//  2. Legacy ~/.checkssl + ~/.domains, with a one-shot migration hint
+//     on stderr so the user knows to run `checkssl config migrate`
+//
+// stderr may be io.Discard when called from a reload callback (we don't
+// want to spam the hint on every file event). addErr collects parse
+// errors as usual.
+func loadDefaultSource(cfg settings.Settings, addErr func(string), stderr io.Writer) []config.Entry {
+	var entries []config.Entry
+
+	cfgDir, _ := paths.ConfigDir()
+	if cfgDir != "" {
+		// Primary file.
+		primary := filepath.Join(cfgDir, cfg.DomainsFile)
+		if _, err := os.Stat(primary); err == nil {
+			entries = append(entries, config.ReadFile(primary, addErr)...)
+		}
+		// Glob — resolved relative to the config dir unless it's absolute.
+		glob := cfg.DomainsGlob
+		if glob != "" {
+			if !filepath.IsAbs(glob) {
+				glob = filepath.Join(cfgDir, glob)
+			}
+			matches, _ := filepath.Glob(glob)
+			sort.Strings(matches)
+			for _, m := range matches {
+				info, err := os.Stat(m)
+				if err != nil || info.IsDir() {
+					continue
+				}
+				entries = append(entries, config.ReadFile(m, addErr)...)
+			}
+		}
+	}
+
+	// If the new location has nothing, fall back to the legacy layout
+	// one last time. Users who haven't migrated get a hint; it's quiet
+	// afterwards (via stderr being Discard on reload paths).
+	if len(entries) == 0 {
+		legacy := paths.DetectLegacy()
+		if legacy.CheckSSLFile != "" {
+			fmt.Fprintln(stderr, "hint: reading legacy ~/.checkssl — run `checkssl config migrate` to adopt the new layout")
+			entries = append(entries, config.ReadFile(legacy.CheckSSLFile, addErr)...)
+		}
+	}
+
+	return config.DedupeFirst(entries)
 }
 
 func printUsage(w io.Writer) {
@@ -381,7 +439,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  checkssl -f domains.txt --format json")
 	fmt.Fprintln(w, "  checkssl -d a.com -d b.com --concurrency 50")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "If no source is given, checkssl reads ~/.checkssl.")
+	fmt.Fprintln(w, "If no source is given, checkssl reads its default from the config")
+	fmt.Fprintln(w, "directory (see `checkssl config path`). Legacy ~/.checkssl is still")
+	fmt.Fprintln(w, "picked up as a fallback — use `checkssl config migrate` to move.")
 }
 
 // collectEntries merges -d and -f inputs, dedupes on the domain name
