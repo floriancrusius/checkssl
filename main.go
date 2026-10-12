@@ -216,7 +216,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return fresh
 		}
 		backupRoot, _ := paths.BackupsDir()
-		newDir, newSuffix := resolveNewFileTarget(cfg)
+		newDir, newSuffix := resolveNewFileTarget(cfg, entries)
 		if err := tui.Run(tui.Options{
 			Entries:       entries,
 			Timeout:       opts.timeout,
@@ -369,15 +369,30 @@ func parseFlags(args []string, stderr io.Writer, cfg settings.Settings) (cliOpti
 }
 
 // resolveNewFileTarget picks the directory where the TUI's `N` key
-// drops a newly created include file, and the filename suffix the user's
-// glob expects. Preference order:
+// drops a newly created include file, and the filename suffix the
+// user's glob expects.
 //
-//  1. The directory of the configured domains_glob (`domains.d/*.list`
-//     → `<cfgDir>/domains.d/`, suffix `.list`).
-//  2. Legacy `~/.domains/` with no suffix, for users who haven't
-//     migrated yet.
-//  3. Empty — the TUI disables `N` with a status-line note.
-func resolveNewFileTarget(cfg settings.Settings) (dir, suffix string) {
+// We prefer the directory that the *current entries* actually live
+// in, with the suffix most of them use — that way a new file lands
+// next to its neighbours and is picked up by whatever @include glob
+// is already active. A user still on the legacy ~/.domains/ layout
+// gets new files there, not in the (empty) new-layout dir, so their
+// reload doesn't accidentally drop the legacy entries.
+//
+// With no entries (first run, nothing configured), we fall back to:
+//
+//  1. The directory of the configured domains_glob, suffix inferred
+//     from its pattern (`domains.d/*.list` → `<cfgDir>/domains.d/`
+//     with `.list`).
+//  2. Legacy `~/.domains/`, no suffix.
+//  3. Empty — `N` is disabled with a status-line note.
+func resolveNewFileTarget(cfg settings.Settings, entries []config.Entry) (dir, suffix string) {
+	// Look at what we actually loaded first.
+	if dir, suffix, ok := targetFromEntries(entries); ok {
+		return dir, suffix
+	}
+
+	// No entries yet — derive from the configured glob.
 	if cfg.DomainsGlob != "" {
 		cfgDir, _ := paths.ConfigDir()
 		glob := cfg.DomainsGlob
@@ -385,16 +400,13 @@ func resolveNewFileTarget(cfg settings.Settings) (dir, suffix string) {
 			glob = filepath.Join(cfgDir, glob)
 		}
 		dir = filepath.Dir(glob)
-		// Extract a trailing `.ext` suffix from the glob pattern so a
-		// new file lands matching it (e.g. "*.list" → ".list"). Any
-		// base pattern without a dotted suffix (just "*") means "no
-		// suffix needed".
 		base := filepath.Base(glob)
 		if i := strings.LastIndex(base, "."); i > 0 && !strings.ContainsAny(base[i:], "*?[") {
 			suffix = base[i:]
 		}
 		return dir, suffix
 	}
+
 	legacy := paths.DetectLegacy()
 	if legacy.DomainsDir != "" {
 		return legacy.DomainsDir, ""
@@ -402,27 +414,88 @@ func resolveNewFileTarget(cfg settings.Settings) (dir, suffix string) {
 	return "", ""
 }
 
+// knownListSuffixes are the file extensions we recognise as real
+// list-file suffixes (as opposed to accidental TLDs on filenames like
+// `~/.domains/hermine.ai`). Only these pin an N-created file's suffix.
+var knownListSuffixes = map[string]bool{
+	".list": true,
+	".txt":  true,
+	".conf": true,
+	".cfg":  true,
+}
+
+// targetFromEntries picks the dominant parent dir among the entries'
+// source files and, if the entries use a recognised list-file suffix,
+// returns that too. ok=false means no entry carries provenance (every
+// one came from -d, or the list is empty) — caller should fall back
+// to the config-derived default.
+func targetFromEntries(entries []config.Entry) (dir, suffix string, ok bool) {
+	dirCount := map[string]int{}
+	extCount := map[string]int{}
+	for _, e := range entries {
+		if e.File == "" {
+			continue
+		}
+		dirCount[filepath.Dir(e.File)]++
+		if ext := filepath.Ext(e.File); knownListSuffixes[ext] {
+			extCount[ext]++
+		}
+	}
+	if len(dirCount) == 0 {
+		return "", "", false
+	}
+	var bestDir string
+	var bestN int
+	for d, n := range dirCount {
+		if n > bestN {
+			bestDir, bestN = d, n
+		}
+	}
+	// Pin the suffix when a clear majority of entries use the same
+	// list-file suffix. If no entries use a recognised one, return
+	// empty — a dir of `hermine.ai`, `zauberware.com` legacy files
+	// should get a new `lfcr.de` (no suffix), not `lfcr.de.ai`.
+	var bestExt string
+	var bestExtN int
+	for e, n := range extCount {
+		if n > bestExtN {
+			bestExt, bestExtN = e, n
+		}
+	}
+	if bestExtN*2 >= bestN {
+		return bestDir, bestExt, true
+	}
+	return bestDir, "", true
+}
+
 // loadDefaultSource reads the entries that the user has configured as
-// their standing scan source. Preference order:
-//
-//  1. New-layout <config dir>/domains + domains.d glob
-//  2. Legacy ~/.checkssl + ~/.domains, with a one-shot migration hint
-//     on stderr so the user knows to run `checkssl config migrate`
+// their standing scan source. We deliberately read EITHER legacy or
+// the new layout — never both — so a half-migrated setup doesn't
+// quietly merge two sources behind the user's back. If
+// ~/.checkssl exists, we treat the user as still-on-legacy; the
+// hint on stderr nudges them towards `checkssl config migrate` once,
+// at which point they can delete the legacy file and the new layout
+// takes over automatically.
 //
 // stderr may be io.Discard when called from a reload callback (we don't
 // want to spam the hint on every file event). addErr collects parse
 // errors as usual.
 func loadDefaultSource(cfg settings.Settings, addErr func(string), stderr io.Writer) []config.Entry {
-	var entries []config.Entry
+	// Legacy wins when present. One source at a time.
+	legacy := paths.DetectLegacy()
+	if legacy.CheckSSLFile != "" {
+		fmt.Fprintln(stderr, "hint: reading legacy ~/.checkssl — run `checkssl config migrate` to adopt the new layout")
+		return config.DedupeFirst(config.ReadFile(legacy.CheckSSLFile, addErr))
+	}
 
+	// New layout.
+	var entries []config.Entry
 	cfgDir, _ := paths.ConfigDir()
 	if cfgDir != "" {
-		// Primary file.
 		primary := filepath.Join(cfgDir, cfg.DomainsFile)
 		if _, err := os.Stat(primary); err == nil {
 			entries = append(entries, config.ReadFile(primary, addErr)...)
 		}
-		// Glob — resolved relative to the config dir unless it's absolute.
 		glob := cfg.DomainsGlob
 		if glob != "" {
 			if !filepath.IsAbs(glob) {
@@ -439,18 +512,6 @@ func loadDefaultSource(cfg settings.Settings, addErr func(string), stderr io.Wri
 			}
 		}
 	}
-
-	// If the new location has nothing, fall back to the legacy layout
-	// one last time. Users who haven't migrated get a hint; it's quiet
-	// afterwards (via stderr being Discard on reload paths).
-	if len(entries) == 0 {
-		legacy := paths.DetectLegacy()
-		if legacy.CheckSSLFile != "" {
-			fmt.Fprintln(stderr, "hint: reading legacy ~/.checkssl — run `checkssl config migrate` to adopt the new layout")
-			entries = append(entries, config.ReadFile(legacy.CheckSSLFile, addErr)...)
-		}
-	}
-
 	return config.DedupeFirst(entries)
 }
 
