@@ -63,6 +63,48 @@ func TestResolve_EnvFallback_UsesEditorWhenVisualUnset(t *testing.T) {
 	}
 }
 
+func TestResolve_PathWithSpacesStaysOneArg(t *testing.T) {
+	// Regression: a {file} substitution containing spaces (macOS
+	// Library/Application Support/...) must land in ONE argv entry.
+	// Prior code substituted before splitting, so nano opened two
+	// phantom files ("Application" + "Support/.../lfcr.de.list")
+	// and the user's save landed on the wrong path.
+	file := "/Users/u/Library/Application Support/checkssl/domains.d/lfcr.de.list"
+	cmd, err := Resolve("nano +{line} {file}", file, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"nano", "+3", file}
+	if len(cmd.Args) != len(want) {
+		t.Fatalf("argv = %v (len %d), want %v (len %d)",
+			cmd.Args, len(cmd.Args), want, len(want))
+	}
+	for i := range want {
+		if cmd.Args[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, cmd.Args[i], want[i])
+		}
+	}
+}
+
+func TestResolve_VSCodeTemplatePathWithSpaces(t *testing.T) {
+	// VSCode uses {file}:{line} as a single token — spaces inside
+	// {file} must likewise stay inside that one token.
+	file := "/Users/u/Library/Application Support/checkssl/config.toml"
+	cmd, err := Resolve("code --wait --goto {file}:{line}", file, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"code", "--wait", "--goto", file + ":1"}
+	if len(cmd.Args) != len(want) {
+		t.Fatalf("argv = %v, want %v", cmd.Args, want)
+	}
+	for i := range want {
+		if cmd.Args[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, cmd.Args[i], want[i])
+		}
+	}
+}
+
 func TestResolve_UnterminatedQuoteIsAnError(t *testing.T) {
 	_, err := Resolve(`code --wait "foo`, "/tmp/x", 1)
 	if err == nil || !strings.Contains(err.Error(), "unterminated quote") {

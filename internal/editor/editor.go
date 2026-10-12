@@ -30,9 +30,10 @@ var ErrNoEditor = errors.New("no editor configured and $VISUAL/$EDITOR are unset
 //	{file}  — absolute path to the file
 //	{line}  — 1-indexed line number
 //
-// Shell quoting is NOT performed — paths with spaces require the user
-// to quote them in the template, or to set $VISUAL/$EDITOR which bypass
-// the template entirely.
+// Paths with spaces (e.g. macOS "Library/Application Support/…")
+// survive without the user having to quote anything: substitution
+// happens AFTER the template is split into argv tokens, so the whole
+// path stays in a single argument.
 func Resolve(tmpl string, file string, line int) (*exec.Cmd, error) {
 	if line < 1 {
 		line = 1
@@ -52,18 +53,25 @@ func Resolve(tmpl string, file string, line int) (*exec.Cmd, error) {
 	return nil, ErrNoEditor
 }
 
-// cmdFromTemplate expands {file}/{line} in tmpl and splits the result
-// into argv. We respect simple double-quoted segments so a path with a
-// space in it survives when the user has wrapped it in quotes.
+// cmdFromTemplate splits tmpl into argv tokens FIRST and then expands
+// {file} / {line} inside each token. The split-before-substitute order
+// is load-bearing: a file path with spaces (macOS `Library/Application
+// Support/…` is the common case) would otherwise be chopped into
+// multiple argv entries by the shell-field splitter, and the editor
+// would open two "files" — the halves of the path — instead of one.
 func cmdFromTemplate(tmpl, file string, line int) (*exec.Cmd, error) {
-	expanded := strings.ReplaceAll(tmpl, "{file}", file)
-	expanded = strings.ReplaceAll(expanded, "{line}", strconv.Itoa(line))
-	parts, err := splitFields(expanded)
+	parts, err := splitFields(tmpl)
 	if err != nil {
 		return nil, err
 	}
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("editor template produced an empty command line: %q", tmpl)
+	}
+	lineStr := strconv.Itoa(line)
+	for i, p := range parts {
+		p = strings.ReplaceAll(p, "{file}", file)
+		p = strings.ReplaceAll(p, "{line}", lineStr)
+		parts[i] = p
 	}
 	//nolint:gosec // editor is user-configured; invoking it is the whole point.
 	return exec.Command(parts[0], parts[1:]...), nil
