@@ -105,7 +105,7 @@ checkssl -f domains.txt --concurrency 200
 ### Interactive terminal UI
 
 ```
-checkssl -i                       # scan ~/.checkssl in a live TUI
+checkssl -i                       # scan the configured source in a live TUI
 checkssl -i -f ~/.domains/prod.list --show-ip
 ```
 
@@ -243,8 +243,12 @@ One domain per line. `#` starts a comment (whole-line or end-of-line).
 Lines starting with `@include <path>` pull in another file, or a glob
 of files. Paths may be absolute, start with `~/` (home-expanded), or
 resolve relative to the including file. Glob patterns (`*`, `?`,
-`[…]`) are matched and visited in sorted order; directories are
-silently skipped; include cycles are detected and reported.
+`[…]`) are matched and visited in sorted order; a wildcard glob that
+matches zero files is silently accepted (so an empty `domains.d/` is
+not an error); directories are silently skipped; include cycles are
+detected and reported. A concrete include path with no wildcards that
+doesn't exist still reports an error — that's a real typo, not an
+empty-collection case.
 
 ```
 # ~/.config/checkssl/domains
@@ -256,15 +260,24 @@ staging.example.com     # rotated 2026-08
 
 ### Legacy ~/.checkssl + ~/.domains/
 
-If you upgraded from a pre-v2 install, `checkssl` still reads
-`~/.checkssl` and `~/.domains/*` as a fallback and prints a one-shot
-hint on stderr. Move everything to the new location at your own pace:
+If you upgraded from a pre-v2 install, `checkssl` reads `~/.checkssl`
+and `~/.domains/*` as a fallback — EITHER the legacy layout OR the
+new one, never both — and prints a one-shot hint on stderr. Move
+everything to the new location at your own pace:
 
 ```
-$ checkssl config migrate --dry-run    # preview
+$ checkssl config migrate --dry-run    # preview, including @include rewrites
 $ checkssl config migrate              # copy; originals are kept
-$ rm ~/.checkssl ~/.domains/*.bak      # when you're confident
+$ rm ~/.checkssl && rm -rf ~/.domains/ # when you're confident
 ```
+
+`migrate` copies `~/.checkssl` to `<config dir>/domains` and every
+`~/.domains/<name>` to `<config dir>/domains.d/<name>.list`. Any
+`@include ~/.domains/...` directives in the primary file are rewritten
+to point at the new `domains.d/` layout — without that rewrite the
+migrated primary would still reference the old path, and removing the
+legacy `~/.domains/` would leave it pointing at nothing. Each rewrite
+is printed to stdout so you can audit the change.
 
 ### Backups and `config gc`
 
@@ -398,11 +411,14 @@ make clean
 
 ```
 main.go                    CLI parsing + orchestration
+cmd_config.go              checkssl config {path|edit|show|init|migrate|gc}
 internal/cert/             tls.Dial + independent x509 verification
-  cert.go
-  cert_test.go             unit tests via injected Dialer
-  integration_test.go      end-to-end via httptest with a local CA
-internal/render/           table / csv / json formatters
+internal/config/           domain-list parser (+ include globs, writer, backups)
+internal/editor/           editor template resolver ({file}/{line}, $VISUAL fallback)
+internal/paths/            OS-native config/cache dir resolution
+internal/render/           table / csv / json / html / nagios formatters
+internal/settings/         config.toml loader + env + source-tracked precedence
+internal/tui/              Bubble Tea TUI, fsnotify hot-reload, in-place edits
 ```
 
 The `internal/cert` package is import-safe from other Go programs — if you
