@@ -164,8 +164,10 @@ func TestReadFile_IncludeGlobSkipsDirs(t *testing.T) {
 }
 
 func TestReadFile_IncludeNoMatchReportsError(t *testing.T) {
+	// A concrete include path (no wildcards) that resolves to nothing
+	// is a real error — the user named a specific file that isn't there.
 	dir := t.TempDir()
-	main := writeFile(t, filepath.Join(dir, "main.txt"), "@include missing/*.list\n")
+	main := writeFile(t, filepath.Join(dir, "main.txt"), "@include missing.list\n")
 
 	var errs []string
 	entries := ReadFile(main, func(s string) { errs = append(errs, s) })
@@ -174,6 +176,23 @@ func TestReadFile_IncludeNoMatchReportsError(t *testing.T) {
 	}
 	if len(errs) != 1 || !strings.Contains(errs[0], "matched no files") {
 		t.Errorf("errors = %v", errs)
+	}
+}
+
+func TestReadFile_IncludeEmptyGlobIsSilent(t *testing.T) {
+	// A wildcard glob that matches no files is NOT an error — the user
+	// may just have cleaned out ~/.domains/ or hasn't created any lists
+	// yet. The include directive stays, the glob simply yields nothing.
+	dir := t.TempDir()
+	main := writeFile(t, filepath.Join(dir, "main.txt"), "@include empty/*.list\n")
+
+	var errs []string
+	entries := ReadFile(main, func(s string) { errs = append(errs, s) })
+	if len(entries) != 0 {
+		t.Errorf("entries = %v", entries)
+	}
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for empty glob, got %v", errs)
 	}
 }
 
@@ -204,8 +223,10 @@ func TestReadFile_IncludeCycleDetected(t *testing.T) {
 }
 
 func TestExpandInclude_HomeTildeExpansion(t *testing.T) {
+	// Tilde-prefixed concrete path (no wildcards) that doesn't exist →
+	// still a real error, and the error message must have ~/ expanded.
 	var errs []string
-	out := expandInclude("~/definitely-not-a-real-checkssl-path/*.list", "/tmp",
+	out := expandInclude("~/definitely-not-a-real-checkssl-path.list", "/tmp",
 		func(s string) { errs = append(errs, s) }, map[string]struct{}{})
 	if len(out) != 0 {
 		t.Errorf("expected empty result, got %v", out)

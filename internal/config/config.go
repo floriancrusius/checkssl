@@ -93,6 +93,14 @@ func readFileWithSeen(path string, addErr func(string), seen map[string]struct{}
 	return out
 }
 
+// hasGlobMeta reports whether spec contains any filepath.Glob
+// metacharacter. Used to decide whether an empty match is an error
+// (concrete missing path) or a benign "nothing to include yet" case
+// (wildcard glob that matches no files).
+func hasGlobMeta(spec string) bool {
+	return strings.ContainsAny(spec, "*?[")
+}
+
 // isBackupFile reports whether the basename matches the backup pattern
 // that pre-v2 Writer versions dropped next to the original config file.
 // Current writes land in the user's cache dir, but existing pollution
@@ -120,7 +128,12 @@ func expandInclude(spec, baseDir string, addErr func(string), seen map[string]st
 		return nil
 	}
 	if len(matches) == 0 {
-		addErr(fmt.Sprintf("include %q matched no files", spec))
+		// A wildcard glob that matches nothing is fine — the user may
+		// just have no list files right now. A concrete path with no
+		// wildcards that doesn't match something is a real error.
+		if !hasGlobMeta(spec) {
+			addErr(fmt.Sprintf("include %q matched no files", spec))
+		}
 		return nil
 	}
 	sort.Strings(matches)
