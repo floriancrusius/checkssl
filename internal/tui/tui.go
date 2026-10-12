@@ -474,6 +474,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleChip(cert.StatusInvalid)
 	case "5":
 		m.toggleChip(cert.StatusError)
+	default:
+		// Surface unmatched keys on the status line so a mis-mapped
+		// terminal can be debugged (e.g. German layout turning `#`
+		// into something else, or terminfo swallowing it).
+		if key != "" {
+			m.lastError = "unmatched key: " + fmt.Sprintf("%q", key)
+		}
 	}
 	return m, nil
 }
@@ -504,18 +511,19 @@ func (m *model) toggleChip(s cert.Status) {
 // no source or the write fails.
 func (m *model) commentOutSelected() tea.Cmd {
 	if m.cursor >= len(m.rows) {
+		m.lastError = "no row under cursor"
 		return nil
 	}
 	r := m.rows[m.cursor]
 	if r.Source == "" || r.SourceLine == 0 {
-		m.lastError = "no source file for this row — nothing to comment out"
+		m.lastError = fmt.Sprintf("no source for %s (added via -d?)", r.Domain)
 		return nil
 	}
 	if err := m.writer.CommentOutLine(r.Source, r.SourceLine); err != nil {
 		m.lastError = fmt.Sprintf("# failed: %v", err)
 		return nil
 	}
-	m.lastError = ""
+	m.lastError = fmt.Sprintf("commented out %s at line %d", r.Domain, r.SourceLine)
 	return m.reload()
 }
 
@@ -525,18 +533,19 @@ func (m *model) commentOutSelected() tea.Cmd {
 // semantics as commentOutSelected.
 func (m *model) deleteSelected() tea.Cmd {
 	if m.cursor >= len(m.rows) {
+		m.lastError = "no row under cursor"
 		return nil
 	}
 	r := m.rows[m.cursor]
 	if r.Source == "" || r.SourceLine == 0 {
-		m.lastError = "no source file for this row — nothing to delete"
+		m.lastError = fmt.Sprintf("no source for %s (added via -d?)", r.Domain)
 		return nil
 	}
 	if err := m.writer.DeleteLine(r.Source, r.SourceLine); err != nil {
 		m.lastError = fmt.Sprintf("delete failed: %v", err)
 		return nil
 	}
-	m.lastError = ""
+	m.lastError = fmt.Sprintf("deleted %s from line %d", r.Domain, r.SourceLine)
 	return m.reload()
 }
 
@@ -580,8 +589,17 @@ func (m *model) reload() tea.Cmd {
 	// Re-parse the config so additions/removals since the last scan land.
 	// Without this, hot-reload after an external edit still scans the
 	// stale entry list the TUI was started with.
+	before := len(m.opts.Entries)
 	if m.opts.Reload != nil {
 		m.opts.Entries = m.opts.Reload()
+	}
+	after := len(m.opts.Entries)
+	// Tack a reload-size note onto the current status so the user can
+	// tell at a glance whether the reparse actually dropped the row.
+	if m.lastError != "" {
+		m.lastError = fmt.Sprintf("%s · reload %d→%d", m.lastError, before, after)
+	} else {
+		m.lastError = fmt.Sprintf("reload %d→%d", before, after)
 	}
 	opts := m.opts
 	return func() tea.Msg {
