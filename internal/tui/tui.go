@@ -27,6 +27,13 @@ type Options struct {
 	Timeout     time.Duration
 	Concurrency int
 	ShowIP      bool
+	// Reload re-parses the user's original source (config file + -d args)
+	// and returns the fresh entry list. Called on every reload (manual
+	// `r`, post-edit, fsnotify) so edits that add or remove domains are
+	// picked up — not just edits that change existing lines. Leave nil
+	// to disable re-parsing; the TUI then re-scans the Entries it was
+	// started with.
+	Reload func() []config.Entry
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -44,6 +51,14 @@ func Run(opts Options) error {
 	m := initialModel(opts)
 	p := tea.NewProgram(m)
 	progRef = p
+
+	// Watch the config files for external edits (vim, VSCode, …). On a
+	// filesChangedMsg the TUI triggers a reload automatically. Best
+	// effort: if the OS cannot give us a watcher we silently continue
+	// without hot-reload.
+	if w, err := startFileWatcher(p, opts.Entries); err == nil && w != nil {
+		defer w.Close() //nolint:errcheck // nothing useful to do with the error on shutdown
+	}
 
 	// Kick off the first scan in the background. All subsequent re-scans
 	// are started from the Update loop via a dedicated command.
@@ -319,6 +334,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.reload()
 
+	case filesChangedMsg:
+		// External edit landed (vim save, VSCode, …) — refresh so the
+		// scan reflects what's on disk now.
+		m.lastError = ""
+		return m, m.reload()
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -489,13 +510,20 @@ func (m *model) reload() tea.Cmd {
 	m.cursor = 0
 	m.scanning = true
 	gen := m.generation
+	// Re-parse the config so additions/removals since the last scan land.
+	// Without this, hot-reload after an external edit still scans the
+	// stale entry list the TUI was started with.
+	if m.opts.Reload != nil {
+		m.opts.Entries = m.opts.Reload()
+	}
+	opts := m.opts
 	return func() tea.Msg {
 		go func() {
 			// NB: we cannot call p.Send from inside a Cmd easily, so start a
 			// goroutine that triggers via a package-level program handle.
 			// Use the stored reference set at Run().
 			if progRef != nil {
-				runScan(progRef, m.opts, gen)
+				runScan(progRef, opts, gen)
 			}
 		}()
 		return nil

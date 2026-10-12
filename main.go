@@ -193,11 +193,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// --tui takes over — swap the one-shot report for the interactive view.
 	if opts.interactive {
+		// reparse rebuilds the entry list from scratch each time the TUI
+		// reloads, so external edits that add/remove domains land on the
+		// next scan rather than being invisible until the user restarts.
+		// Reload errors are swallowed on purpose: the user already sees
+		// them on the first scan, and spamming them on every file-event
+		// reload is noise.
+		swallow := func(string) {}
+		reparse := func() []config.Entry {
+			fresh, sourceGivenReload := collectEntries(opts, swallow)
+			if !sourceGivenReload && len(fresh) == 0 {
+				home, err := os.UserHomeDir()
+				if err == nil {
+					path := filepath.Join(home, defaultConfigFile)
+					if _, statErr := os.Stat(path); statErr == nil {
+						fresh = append(fresh, config.ReadFile(path, swallow)...)
+						fresh = config.DedupeFirst(fresh)
+					}
+				}
+			}
+			if len(fresh) == 0 {
+				fresh = []config.Entry{{Domain: defaultDomain}}
+			}
+			return fresh
+		}
 		if err := tui.Run(tui.Options{
 			Entries:     entries,
 			Timeout:     opts.timeout,
 			Concurrency: opts.concurrency,
 			ShowIP:      opts.showIP,
+			Reload:      reparse,
 		}); err != nil {
 			fmt.Fprintln(stderr, "tui error:", err)
 			return exitCodeError
