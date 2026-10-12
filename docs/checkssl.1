@@ -1,4 +1,4 @@
-.TH CHECKSSL 1 "October 2026" "checkssl" "User Commands"
+.TH CHECKSSL 1 "2026-10-12" "checkssl" "User Commands"
 .SH NAME
 checkssl \- inspect TLS certificates for one or more domains
 .SH SYNOPSIS
@@ -223,9 +223,15 @@ As a soft migration aid,
 still reads the legacy
 .I ~/.checkssl
 and
-.I ~/.domains/*
-if the new location is empty, and prints a one-shot hint on stderr
-pointing at
+.IR ~/.domains/* .
+When
+.I ~/.checkssl
+exists it wins outright
+.RB ( either
+legacy
+.B or
+the new layout is read, never both, so a half-migrated setup cannot
+silently merge two sources). A one-shot hint on stderr points at
 .BR "checkssl config migrate" .
 .PP
 Lines of the form
@@ -236,8 +242,13 @@ start with
 (expanded to the user's home directory), or is otherwise resolved
 relative to the including file. Glob patterns
 .RB ( * ", " ? ", " [...] )
-are expanded and matches are visited in sorted order; directories are
-silently skipped. Include cycles are detected and reported. Example:
+are expanded and matches are visited in sorted order; a wildcard glob
+that matches zero files is silently accepted (so an empty
+.I domains.d/
+is not an error); directories are silently skipped; include cycles
+are detected and reported. A concrete include path with no wildcards
+that does not resolve to a file is still reported as an error \(em
+that is a real typo, not an empty\-collection case. Example:
 .PP
 .RS
 .EX
@@ -368,15 +379,23 @@ Copy legacy
 .I ~/.checkssl
 to
 .I <config dir>/domains
-and
-.I ~/.domains/*
+and every
+.I ~/.domains/<name>
 to
-.IR "<config dir>/domains.d/" .
-Originals are kept. With
+.IR "<config dir>/domains.d/<name>.list" .
+Any
+.BI "@include ~/.domains/" ...
+directives inside the primary file are rewritten to point at the new
+.I domains.d/
+layout \(em without that rewrite the migrated primary would still
+reference the old path, and removing the legacy
+.I ~/.domains/
+would leave it pointing at nothing. Each rewrite is printed to stdout
+so the change can be audited. Originals are kept. With
 .B --dry-run
 (or
 .BR \-n ),
-only prints what would be copied.
+only prints what would be copied and rewritten.
 .TP
 .BR "checkssl config gc " [ \-\-older-than\  \fIage\fR ]
 Prune session backup folders older than the retention window. Default
@@ -433,11 +452,14 @@ Snapshots of files mutated in-TUI, one folder per session. Pruned by
 .BR "checkssl config gc" .
 .TP
 .I ~/.checkssl ", " ~/.domains/
-Legacy locations from pre-v2 installs. Still read as a fallback;
+Legacy locations from pre-v2 installs. Still read as a fallback when
+.I ~/.checkssl
+exists (either\-or, never both);
 .B checkssl config migrate
-moves them.
+moves them and rewrites the primary's
+.B @include
+directives.
 .SH EXAMPLES
-.PP
 Check a single domain:
 .PP
 .RS
