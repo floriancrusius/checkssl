@@ -276,6 +276,16 @@ func (m model) renderStatusLine(visible int) string {
 		parts = append(parts, "filter: "+m.filter)
 	}
 	parts = append(parts, "sort: "+m.sort.String()+directionArrow(m.sortDesc))
+	// Always show provenance of the cursor row so you can see at a
+	// glance whether an edit key would have something to act on.
+	if m.cursor < len(m.rows) {
+		r := m.rows[m.cursor]
+		if r.Source != "" {
+			parts = append(parts, fmt.Sprintf("cursor: %s:%d", displayPath(r.Source), r.SourceLine))
+		} else {
+			parts = append(parts, "cursor: "+r.Domain+" [no source]")
+		}
+	}
 	line := m.st.hint.Render(strings.Join(parts, "   "))
 	if m.lastError != "" {
 		line += "   " + m.st.colCrit.Render("⚠ "+m.lastError)

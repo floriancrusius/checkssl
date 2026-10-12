@@ -339,8 +339,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case filesChangedMsg:
 		// External edit landed (vim save, VSCode, …) — refresh so the
-		// scan reflects what's on disk now.
-		m.lastError = ""
+		// scan reflects what's on disk now. We deliberately preserve
+		// any status message the user's own action just set, since
+		// our own CommentOut/Delete writes ALSO fire fsnotify events
+		// and we'd otherwise wipe the "commented out X" note before
+		// the user could read it.
 		return m, m.reload()
 
 	case tea.KeyPressMsg:
