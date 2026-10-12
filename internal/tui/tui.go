@@ -16,11 +16,12 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/floriancrusius/checkssl/internal/cert"
+	"github.com/floriancrusius/checkssl/internal/config"
 )
 
 // Options is what the CLI hands over to Run.
 type Options struct {
-	Domains     []string
+	Entries     []config.Entry
 	Timeout     time.Duration
 	Concurrency int
 	ShowIP      bool
@@ -28,7 +29,7 @@ type Options struct {
 
 // Run starts the TUI and blocks until the user quits.
 func Run(opts Options) error {
-	if len(opts.Domains) == 0 {
+	if len(opts.Entries) == 0 {
 		return fmt.Errorf("tui: no domains to check")
 	}
 	if opts.Timeout <= 0 {
@@ -78,25 +79,27 @@ func tickCmd() tea.Cmd {
 // runScan is the background goroutine that performs cert.Check on every
 // domain and pushes incremental results back to the program.
 func runScan(p *tea.Program, opts Options, generation int) {
-	p.Send(scanStartedMsg{generation: generation, total: len(opts.Domains), startedAt: time.Now()})
+	p.Send(scanStartedMsg{generation: generation, total: len(opts.Entries), startedAt: time.Now()})
 
 	sem := make(chan struct{}, opts.Concurrency)
 	var wg sync.WaitGroup
 	ctx := context.Background()
 	start := time.Now()
 
-	for _, d := range opts.Domains {
+	for _, e := range opts.Entries {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(d string) {
+		go func(e config.Entry) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r := cert.Check(ctx, d, cert.Options{Timeout: opts.Timeout})
+			r := cert.Check(ctx, e.Domain, cert.Options{Timeout: opts.Timeout})
 			if !r.ExpiresAt.IsZero() {
 				r.ExpiresAt = r.ExpiresAt.In(time.Local)
 			}
+			r.Source = e.File
+			r.SourceLine = e.Line
 			p.Send(scanResultMsg{generation: generation, result: r})
-		}(d)
+		}(e)
 	}
 	wg.Wait()
 	p.Send(scanDoneMsg{generation: generation, elapsed: time.Since(start)})
@@ -136,6 +139,7 @@ const (
 	modeNormal mode = iota
 	modeFilter
 	modeHelp
+	modeDetails
 )
 
 type model struct {
@@ -343,6 +347,20 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Details mode: Esc, l, enter, q close; j/k still move the cursor so the
+	// panel updates as the user browses.
+	if m.mode == modeDetails {
+		switch key {
+		case "esc", "l", "enter", "q":
+			m.mode = modeNormal
+		case "j", "down":
+			m.moveCursor(+1)
+		case "k", "up":
+			m.moveCursor(-1)
+		}
+		return m, nil
+	}
+
 	// Normal mode
 	switch key {
 	case "q", "ctrl+c":
@@ -359,6 +377,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.moveCursor(+10)
 	case "ctrl+u", "pgup":
 		m.moveCursor(-10)
+	case "l", "enter":
+		if len(m.rows) > 0 {
+			m.mode = modeDetails
+		}
 	case "/":
 		m.mode = modeFilter
 		m.filterBuf = m.filter

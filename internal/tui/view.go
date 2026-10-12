@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ func (m model) renderBody() string {
 
 	// --- Footer hint
 	hint := m.st.hint.Render(
-		"j/k nav · g/G ends · s/S sort · d dir · 1-5 toggle · / filter · r reload · ? help · q quit",
+		"j/k nav · g/G ends · l details · s/S sort · d dir · 1-5 toggle · / filter · r reload · ? help · q quit",
 	)
 
 	main := strings.Join([]string{
@@ -76,6 +77,8 @@ func (m model) renderBody() string {
 		return m.renderWithOverlay(main, m.renderFilterOverlay())
 	case modeHelp:
 		return m.renderWithOverlay(main, m.renderHelpOverlay())
+	case modeDetails:
+		return m.renderWithOverlay(main, m.renderDetailsOverlay())
 	}
 	return main
 }
@@ -295,6 +298,7 @@ func (m model) renderHelpOverlay() string {
 		{"j / k", "next / previous host"},
 		{"g / G", "first / last host"},
 		{"ctrl+d / ctrl+u", "scroll ten rows"},
+		{"l · enter", "details for the selected host (source file, issuer, error)"},
 		{"s / S", "cycle sort column forward / backward"},
 		{"d", "toggle sort direction (asc ↔ desc)"},
 		{"1 … 5", "toggle valid · expiring · expired · invalid · error"},
@@ -317,6 +321,75 @@ func (m model) renderHelpOverlay() string {
 	}
 	lines = append(lines, "", m.st.hint.Render("Esc / ? / q to close"))
 	return m.st.helpPanel.Render(strings.Join(lines, "\n"))
+}
+
+// renderDetailsOverlay builds the panel shown when the user presses `l`
+// or Enter on a row. It surfaces the per-domain information that the
+// one-line table has to crop: full source file + line, issuer, errors,
+// SANs. Rendered as a bottom-aligned panel over the main view.
+func (m model) renderDetailsOverlay() string {
+	if m.cursor >= len(m.rows) {
+		return ""
+	}
+	r := m.rows[m.cursor]
+	label := func(k, v string) string {
+		if v == "" {
+			v = "—"
+		}
+		return m.st.helpKey.Render(padCell(k, 9, false)) + "  " + m.st.helpDesc.Render(v)
+	}
+
+	source := "—"
+	if r.Source != "" {
+		source = fmt.Sprintf("%s:%d", displayPath(r.Source), r.SourceLine)
+	}
+
+	expires := "—"
+	if !r.ExpiresAt.IsZero() {
+		expires = r.ExpiresAt.Format("02.01.2006 15:04 MST")
+	}
+
+	lines := []string{
+		m.st.header.Render("Details"),
+		"",
+		label("domain", r.Domain),
+		label("source", source),
+		label("ip", r.ResolvedIP),
+		label("status", string(r.Status)),
+		label("expires", expires),
+		label("issuer", r.Issuer),
+	}
+	if r.AuthError != "" {
+		lines = append(lines, label("auth err", r.AuthError))
+	}
+	if r.Err != "" {
+		lines = append(lines, label("error", r.Err))
+	}
+	if len(r.SubjectAlt) > 0 {
+		sans := strings.Join(r.SubjectAlt, ", ")
+		if len(sans) > 120 {
+			sans = sans[:117] + "…"
+		}
+		lines = append(lines, label("SANs", sans))
+	}
+	lines = append(lines, "", m.st.hint.Render("Esc / l / enter to close · j/k still move the cursor"))
+	return m.st.helpPanel.Render(strings.Join(lines, "\n"))
+}
+
+// displayPath shortens an absolute path by substituting $HOME with ~
+// so the overlay stays readable even for deep home-directory paths.
+func displayPath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if strings.HasPrefix(p, home+"/") {
+		return "~" + p[len(home):]
+	}
+	if p == home {
+		return "~"
+	}
+	return p
 }
 
 func (m model) renderWithOverlay(main, overlay string) string {

@@ -14,13 +14,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/floriancrusius/checkssl/internal/cert"
+	"github.com/floriancrusius/checkssl/internal/config"
 	"github.com/floriancrusius/checkssl/internal/render"
 	"github.com/floriancrusius/checkssl/internal/tui"
 )
@@ -47,9 +46,6 @@ const (
 	exitCodeError      = 1
 	exitCodeUsageError = 2
 )
-
-// domainRegex matches the same shapes the JS version accepted.
-var domainRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$`)
 
 type stringSlice []string
 
@@ -180,24 +176,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// Collect domains from -d/--domain and -f/--file first; only fall back
 	// to the default config file if the user gave no source at all.
-	domains, sourceGiven := collectDomains(opts, addErr)
-	if !sourceGiven && len(domains) == 0 {
+	entries, sourceGiven := collectEntries(opts, addErr)
+	if !sourceGiven && len(entries) == 0 {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			path := filepath.Join(home, defaultConfigFile)
 			if _, statErr := os.Stat(path); statErr == nil {
-				domains = append(domains, readDomainsFromFile(path, addErr)...)
+				entries = append(entries, config.ReadFile(path, addErr)...)
+				entries = config.DedupeFirst(entries)
 			}
 		}
 	}
-	if len(domains) == 0 {
-		domains = []string{defaultDomain}
+	if len(entries) == 0 {
+		entries = []config.Entry{{Domain: defaultDomain}}
 	}
 
 	// --tui takes over — swap the one-shot report for the interactive view.
 	if opts.interactive {
 		if err := tui.Run(tui.Options{
-			Domains:     domains,
+			Entries:     entries,
 			Timeout:     opts.timeout,
 			Concurrency: opts.concurrency,
 			ShowIP:      opts.showIP,
@@ -209,7 +206,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Run TLS checks concurrently, preserving input order.
-	results := checkAll(context.Background(), domains, opts, addErr)
+	results := checkAll(context.Background(), entries, opts, addErr)
 	// Certificates come with UTC timestamps; render dates in the user's
 	// local time so `23:59 UTC` doesn't display as the day before in CET.
 	for i := range results {
@@ -362,160 +359,55 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "If no source is given, checkssl reads ~/.checkssl.")
 }
 
-// collectDomains merges -d and -f inputs, dedupes, and reports validation
-// errors. `sourceGiven` is true if the user provided any -d or -f at all.
-func collectDomains(opts cliOptions, addErr func(string)) (domains []string, sourceGiven bool) {
+// collectEntries merges -d and -f inputs, dedupes on the domain name
+// (first occurrence wins), and reports validation errors.
+// `sourceGiven` is true if the user provided any -d or -f at all.
+func collectEntries(opts cliOptions, addErr func(string)) (entries []config.Entry, sourceGiven bool) {
 	sourceGiven = len(opts.domains) > 0 || len(opts.files) > 0
-	seen := make(map[string]struct{})
-	add := func(d string) {
-		if _, ok := seen[d]; ok {
-			return
-		}
-		seen[d] = struct{}{}
-		domains = append(domains, d)
-	}
 	for _, path := range opts.files {
 		abs, err := filepath.Abs(path)
 		if err != nil {
 			addErr(fmt.Sprintf("resolve %s: %v", path, err))
 			continue
 		}
-		for _, d := range readDomainsFromFile(abs, addErr) {
-			add(d)
-		}
+		entries = append(entries, config.ReadFile(abs, addErr)...)
 	}
 	for _, d := range opts.domains {
 		d = strings.TrimSpace(d)
-		if !isValidDomain(d) {
+		if !config.IsValidDomain(d) {
 			addErr(fmt.Sprintf("invalid domain: %s", d))
 			continue
 		}
-		add(d)
+		// Command-line args have no file provenance.
+		entries = append(entries, config.Entry{Domain: d})
 	}
-	return
-}
-
-func readDomainsFromFile(path string, addErr func(string)) []string {
-	return readDomainsFromFileWithSeen(path, addErr, map[string]struct{}{})
-}
-
-// readDomainsFromFileWithSeen handles `@include <path>` directives, glob
-// patterns and recursion detection. `seen` tracks absolute paths already
-// visited on the current include chain so a file cannot include itself.
-func readDomainsFromFileWithSeen(path string, addErr func(string), seen map[string]struct{}) []string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		addErr(fmt.Sprintf("resolve %s: %v", path, err))
-		return nil
-	}
-	if _, cycle := seen[abs]; cycle {
-		addErr(fmt.Sprintf("include cycle: %s already visited", abs))
-		return nil
-	}
-	seen[abs] = struct{}{}
-
-	//nolint:gosec // path comes from the user via -f/--file; that is the intended use.
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		addErr(fmt.Sprintf("read %s: %v", abs, err))
-		return nil
-	}
-
-	baseDir := filepath.Dir(abs)
-	var out []string
-	for _, raw := range strings.Split(string(data), "\n") {
-		line := raw
-		if i := strings.Index(line, "#"); i >= 0 {
-			line = line[:i]
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		if rest, ok := strings.CutPrefix(line, "@include "); ok {
-			out = append(out, expandInclude(strings.TrimSpace(rest), baseDir, addErr, seen)...)
-			continue
-		}
-
-		if !isValidDomain(line) {
-			addErr(fmt.Sprintf("invalid domain in %s: %s", abs, line))
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-// expandInclude resolves a single @include argument. Supports ~ prefix and
-// glob patterns (via filepath.Glob). Relative paths resolve against baseDir.
-func expandInclude(spec, baseDir string, addErr func(string), seen map[string]struct{}) []string {
-	if strings.HasPrefix(spec, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			spec = filepath.Join(home, spec[2:])
-		}
-	} else if !filepath.IsAbs(spec) {
-		spec = filepath.Join(baseDir, spec)
-	}
-
-	matches, err := filepath.Glob(spec)
-	if err != nil {
-		addErr(fmt.Sprintf("invalid include pattern %q: %v", spec, err))
-		return nil
-	}
-	if len(matches) == 0 {
-		addErr(fmt.Sprintf("include %q matched no files", spec))
-		return nil
-	}
-	// Deterministic order so runs are stable across invocations.
-	sort.Strings(matches)
-
-	var out []string
-	for _, m := range matches {
-		//nolint:gosec // paths come from an explicit user glob; that is the intended use.
-		info, statErr := os.Stat(m)
-		if statErr != nil {
-			addErr(fmt.Sprintf("stat %s: %v", m, statErr))
-			continue
-		}
-		if info.IsDir() {
-			// Skip directories silently — a glob like ~/.domains/* commonly
-			// matches directories the user didn't mean to include.
-			continue
-		}
-		out = append(out, readDomainsFromFileWithSeen(m, addErr, seen)...)
-	}
-	return out
-}
-
-func isValidDomain(d string) bool {
-	d = strings.TrimSpace(strings.ToLower(d))
-	if len(d) == 0 || len(d) > 253 {
-		return false
-	}
-	return domainRegex.MatchString(d)
+	return config.DedupeFirst(entries), sourceGiven
 }
 
 // checkAll fans out TLS checks across up to opts.concurrency workers,
-// preserving the input order in the result slice.
-func checkAll(ctx context.Context, domains []string, opts cliOptions, addErr func(string)) []cert.Result {
-	results := make([]cert.Result, len(domains))
+// preserving the input order in the result slice. Each result is tagged
+// with the originating config file / line so the TUI and renderers can
+// show provenance.
+func checkAll(ctx context.Context, entries []config.Entry, opts cliOptions, addErr func(string)) []cert.Result {
+	results := make([]cert.Result, len(entries))
 	sem := make(chan struct{}, opts.concurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	for i, d := range domains {
+	for i, e := range entries {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, d string) {
+		go func(i int, e config.Entry) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r := cert.Check(ctx, d, cert.Options{Timeout: opts.timeout})
+			r := cert.Check(ctx, e.Domain, cert.Options{Timeout: opts.timeout})
+			r.Source = e.File
+			r.SourceLine = e.Line
 			results[i] = r
 			switch r.Status {
 			case cert.StatusError:
 				mu.Lock()
-				addErr(fmt.Sprintf("%s: %s", d, r.Err))
+				addErr(fmt.Sprintf("%s: %s", e.Domain, r.Err))
 				mu.Unlock()
 			case cert.StatusInvalid:
 				msg := r.AuthError
@@ -523,10 +415,10 @@ func checkAll(ctx context.Context, domains []string, opts cliOptions, addErr fun
 					msg = "invalid certificate"
 				}
 				mu.Lock()
-				addErr(fmt.Sprintf("%s: %s", d, msg))
+				addErr(fmt.Sprintf("%s: %s", e.Domain, msg))
 				mu.Unlock()
 			}
-		}(i, d)
+		}(i, e)
 	}
 	wg.Wait()
 	return results

@@ -36,6 +36,11 @@ type Result struct {
 	Issuer     string
 	SubjectAlt []string
 	ResolvedIP string // the IP address the TLS handshake actually used
+	// Source carries where this domain came from in the user's config.
+	// Populated by the CLI when a result is derived from a file; empty for
+	// -d command-line args and for library callers.
+	Source     string // absolute path of the config file
+	SourceLine int    // 1-indexed line within Source; zero when unknown
 }
 
 // Options configures a Check call. Zero values fall back to sensible defaults.

@@ -172,6 +172,37 @@ func TestFilterMode_SlashOpensAndEscCancels(t *testing.T) {
 	}
 }
 
+func TestDetailsMode_LOpensEscCloses(t *testing.T) {
+	m := seedResults(initialModel(Options{}))
+	m = pressKey(m, "l")
+	if m.mode != modeDetails {
+		t.Fatalf("after l mode = %v, want details", m.mode)
+	}
+	// j/k still move the cursor while the panel is open so the user can
+	// scrub through rows without closing it.
+	before := m.cursor
+	m = pressKey(m, "j")
+	if m.cursor == before {
+		t.Fatalf("j did not move cursor in details mode")
+	}
+	// Esc closes.
+	esc := tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
+	next, _ := m.Update(esc)
+	m = next.(model)
+	if m.mode != modeNormal {
+		t.Fatalf("after Esc mode = %v, want normal", m.mode)
+	}
+}
+
+func TestDetailsMode_LOnEmptyListIsNoop(t *testing.T) {
+	// A fresh model has no rows yet — pressing l should NOT enter details.
+	m := initialModel(Options{})
+	m = pressKey(m, "l")
+	if m.mode != modeNormal {
+		t.Fatalf("with no rows, l should stay in normal mode, got %v", m.mode)
+	}
+}
+
 func TestQuitKeySendsQuitCmd(t *testing.T) {
 	m := seedResults(initialModel(Options{}))
 	msg := tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'})
