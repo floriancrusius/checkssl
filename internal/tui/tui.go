@@ -106,10 +106,13 @@ type (
 		elapsed    time.Duration
 	}
 	// editorDoneMsg lands after $EDITOR exits. On a clean exit we kick off
-	// a reload so edits are reflected immediately.
+	// a reload so edits are reflected immediately. isNew is set by the
+	// `N` handler so the reload step can warn if the user bailed out of
+	// the editor without actually saving any domains.
 	editorDoneMsg struct {
-		err  error
-		file string
+		err   error
+		file  string
+		isNew bool
 	}
 	tickMsg struct{}
 )
@@ -359,6 +362,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastError = fmt.Sprintf("editor: %v", msg.err)
 			return m, nil
+		}
+		if msg.isNew {
+			// Pico/nano needs an explicit Y+Enter at Ctrl+X to save —
+			// users expect vim's :wq semantics and often lose their
+			// typing. Peek at the file on return: an empty-ish file
+			// means the save didn't happen, say so instead of silently
+			// reloading with no change and leaving the user to figure
+			// out why their domains didn't appear.
+			if hasOnlyHeaderOrEmpty(msg.file) {
+				m.lastError = fmt.Sprintf("new file still empty — editor exited without saving? %s",
+					msg.file)
+				return m, nil
+			}
+			m.lastError = fmt.Sprintf("new file saved: %s", msg.file)
 		}
 		return m, m.reload()
 
@@ -613,6 +630,27 @@ func (m *model) deleteSelected() tea.Cmd {
 	return m.reload()
 }
 
+// hasOnlyHeaderOrEmpty reports whether path either doesn't exist, is
+// empty, or contains nothing but comment lines and blank lines. Used
+// to detect "user exited the editor without saving" after `N`.
+func hasOnlyHeaderOrEmpty(path string) bool {
+	//nolint:gosec // path was built by createNewFile from NewFileDir.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return true
+	}
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := raw
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		if strings.TrimSpace(line) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // createNewFile is the body of `N`. Builds the target path from
 // NewFileDir + sanitised basename + NewFileSuffix, writes a header
 // comment so the user doesn't land in an empty buffer, and launches
@@ -657,7 +695,7 @@ func (m *model) createNewFile(name string) tea.Cmd {
 	}
 	m.lastError = fmt.Sprintf("new file: %s", full)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return editorDoneMsg{err: err, file: full}
+		return editorDoneMsg{err: err, file: full, isNew: true}
 	})
 }
 

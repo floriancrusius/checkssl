@@ -411,6 +411,36 @@ func TestNewFile_NoDirConfiguredReportsError(t *testing.T) {
 	}
 }
 
+func TestHasOnlyHeaderOrEmpty(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"missing file", filepath.Join(dir, "nope"), true},
+		{"empty file", write("empty", ""), true},
+		{"only header comment", write("header", "# lfcr.de — add one domain per line\n\n"), true},
+		{"comments and blanks", write("comments", "# one\n\n#two\n   \n"), true},
+		{"one domain", write("one", "# header\nlfcr.de\n"), false},
+		{"domain with inline comment", write("inline", "lfcr.de # my root\n"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasOnlyHeaderOrEmpty(tc.path); got != tc.want {
+				t.Errorf("hasOnlyHeaderOrEmpty(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDetailsMode_LOpensEscCloses(t *testing.T) {
 	m := seedResults(initialModel(Options{}))
 	m = pressKey(m, "l")
