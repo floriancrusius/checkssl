@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/floriancrusius/checkssl/internal/cert"
+	"github.com/floriancrusius/checkssl/internal/config"
 )
 
 // seedResults populates a model with a handful of rows so navigation and
@@ -171,6 +172,56 @@ func TestFilterMode_SlashOpensAndEscCancels(t *testing.T) {
 	}
 	if m.filter != "" {
 		t.Fatalf("after Esc filter = %q, want empty", m.filter)
+	}
+}
+
+// TestCommentOut_HashKeypressRoundTrip is the full-path version of the
+// bug the user hit: press `#` on a real row, verify (a) the file lands
+// commented out AND (b) a subsequent re-parse through the user's actual
+// Reload callback no longer surfaces the domain. This caught the fact
+// that a captured value receiver was dropping the Entries overwrite.
+func TestCommentOut_HashKeypressRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "list.txt")
+	if err := os.WriteFile(cfg, []byte("keep.example\ndrop.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the main.go reparse: on each call, read the file fresh
+	// and return the current entry set. Comment-out must make
+	// drop.example disappear here.
+	reparse := func() []config.Entry {
+		return config.ReadFile(cfg, func(string) {})
+	}
+
+	opts := Options{
+		Entries: reparse(),
+		Reload:  reparse,
+	}
+	m := initialModel(opts)
+	// Seed the model with results that look like a scan already ran,
+	// matching the Entries we passed in — otherwise the handler would
+	// have nothing to act on.
+	m.results = []cert.Result{
+		{Domain: "keep.example", Status: cert.StatusValid, Source: cfg, SourceLine: 1},
+		{Domain: "drop.example", Status: cert.StatusValid, Source: cfg, SourceLine: 2},
+	}
+	m.rebuildRows()
+	m.cursor = 1 // on drop.example
+
+	// Press `#`. The handler should rewrite the file and refresh the
+	// model's Entries via the Reload callback.
+	m = pressKey(m, "#")
+
+	// File must be commented out now.
+	got, _ := os.ReadFile(cfg) //nolint:gosec // test file in tempdir
+	if string(got) != "keep.example\n# drop.example\n" {
+		t.Errorf("file after # = %q", got)
+	}
+	// And the re-parsed entry list must have forgotten drop.example.
+	fresh := m.opts.Entries
+	if len(fresh) != 1 || fresh[0].Domain != "keep.example" {
+		t.Errorf("Entries after # reload = %+v, want only keep.example", fresh)
 	}
 }
 
