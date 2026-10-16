@@ -178,6 +178,9 @@ func TestCfgMigrate_DryRunCopiesNothing(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfgDir, "domains")); err == nil {
 		t.Error("dry-run wrote files to the new location")
 	}
+	if _, err := os.Stat(filepath.Join(cfgDir, "domains.d")); err == nil {
+		t.Error("dry-run created domains.d in the new location")
+	}
 	// Must mention both the primary and the include.
 	for _, want := range []string{".checkssl", "customer-a"} {
 		if !strings.Contains(out.String(), want) {

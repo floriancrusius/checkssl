@@ -322,9 +322,11 @@ func cfgMigrateCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "config dir unresolvable:", err)
 		return exitCodeError
 	}
-	if err := os.MkdirAll(filepath.Join(cfgDir, "domains.d"), 0o700); err != nil {
-		fmt.Fprintln(stderr, "mkdir:", err)
-		return exitCodeError
+	if !dryRun {
+		if err := os.MkdirAll(filepath.Join(cfgDir, "domains.d"), 0o700); err != nil {
+			fmt.Fprintln(stderr, "mkdir:", err)
+			return exitCodeError
+		}
 	}
 
 	// Primary file: ~/.checkssl → <cfgDir>/domains, with any
