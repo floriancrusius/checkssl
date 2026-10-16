@@ -134,6 +134,9 @@ func TestResolveNewFileTarget_PrefersEntriesDirOverConfig(t *testing.T) {
 }
 
 func TestResolveNewFileTarget_FallsBackToConfigWhenNoEntries(t *testing.T) {
+	// Isolate from a real legacy ~/.checkssl on the dev machine, which
+	// would otherwise route the new file to ~/.domains/.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CHECKSSL_CONFIG_DIR", "/tmp/cfg")
 	cfg := settings.Defaults()
 	dir, suf := resolveNewFileTarget(cfg, nil)
